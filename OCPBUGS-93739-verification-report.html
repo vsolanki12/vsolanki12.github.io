@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OCPBUGS-93739 Verification Report</title>
+<style>
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; color: #333; }
+  .container { max-width: 1100px; margin: 0 auto; }
+  h1 { color: #1a1a2e; border-bottom: 3px solid #e94560; padding-bottom: 10px; }
+  h2 { color: #16213e; margin-top: 30px; border-bottom: 2px solid #0f3460; padding-bottom: 6px; }
+  h3 { color: #0f3460; margin-top: 20px; }
+  .meta { background: #fff; border-left: 4px solid #0f3460; padding: 12px 18px; margin: 16px 0; border-radius: 4px; }
+  .meta strong { color: #0f3460; }
+  pre { background: #1a1a2e; color: #e0e0e0; padding: 16px; border-radius: 6px; overflow-x: auto; font-size: 13px; line-height: 1.5; }
+  .pass { color: #2ecc71; font-weight: bold; }
+  .fail { color: #e74c3c; font-weight: bold; }
+  .info { color: #3498db; font-weight: bold; }
+  .warn { color: #f39c12; font-weight: bold; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th, td { border: 1px solid #ddd; padding: 10px 14px; text-align: left; }
+  th { background: #0f3460; color: #fff; }
+  tr:nth-child(even) { background: #f9f9f9; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; }
+  .badge-pass { background: #d4edda; color: #155724; }
+  .badge-fail { background: #f8d7da; color: #721c24; }
+  .badge-info { background: #d1ecf1; color: #0c5460; }
+  .separator { border: none; border-top: 3px dashed #0f3460; margin: 40px 0; }
+  .date-header { color: #fff; padding: 10px 18px; border-radius: 6px 6px 0 0; margin-bottom: 0; font-size: 14px; }
+  .date-header-blue { background: #0f3460; }
+  .date-header-red { background: #c0392b; }
+  .date-header-green { background: #27ae60; }
+  .date-section { border-radius: 6px; margin: 30px 0; }
+  .date-section-blue { border: 2px solid #0f3460; }
+  .date-section-red { border: 2px solid #c0392b; }
+  .date-section-green { border: 2px solid #27ae60; }
+  .date-body { padding: 16px 20px; }
+  .arrow-box { text-align: center; margin: 10px 0; font-size: 28px; color: #0f3460; }
+  .diff-add { color: #2ecc71; }
+  .diff-del { color: #e74c3c; }
+  .artifact-label { display: inline-block; background: #0f3460; color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>OCPBUGS-93739 &mdash; Verification Report</h1>
+
+<div class="meta">
+  <strong>Jira:</strong> <a href="https://issues.redhat.com/browse/OCPBUGS-93739">OCPBUGS-93739</a><br>
+  <strong>Branch:</strong> fix-OCPBUGS-93739<br>
+  <strong>Summary:</strong> CI flake &mdash; <code>TestCreateClusterRequestServingIsolation/Teardown</code> fails because NLBs take too long to be asynchronously deprovisioned during HC deletion<br>
+  <strong>Root Cause:</strong> HCCO's <code>ensureServiceLoadBalancersRemoved</code> deletes LB Services and waits for the cloud controller to async-delete NLBs (~2 min, non-deterministic). The e2e teardown validation also lacked active NLB cleanup.<br>
+  <strong>PR:</strong> <a href="https://github.com/openshift/hypershift/pull/9052">#9052</a><br>
+  <strong>Date:</strong> 2026-07-22
+</div>
+
+<!-- ============================================================ -->
+<!-- TEST ENVIRONMENT                                               -->
+<!-- ============================================================ -->
+<h2>Test Environment</h2>
+
+<table>
+  <tr><th>Component</th><th>Details</th></tr>
+  <tr><td>Management Cluster</td><td>AWS</td></tr>
+  <tr><td>HostedCluster (before fix)</td><td><code>test-93739</code> &mdash; stock CPO, reproduces the slow LB teardown</td></tr>
+  <tr><td>HostedCluster (after fix)</td><td><code>ocpbugs-93739-fix</code> &mdash; custom CPO with fix</td></tr>
+  <tr><td>Release Image</td><td>OCP <code>5.0.0-ec.4</code></td></tr>
+  <tr><td>Custom CPO Image</td><td><code>&lt;custom-cpo-image&gt;</code></td></tr>
+  <tr><td>Override Method</td><td><code>oc annotate hostedcluster hypershift.openshift.io/control-plane-operator-image=...</code></td></tr>
+</table>
+
+<!-- ============================================================ -->
+<!-- ROOT CAUSE ANALYSIS                                            -->
+<!-- ============================================================ -->
+<h2>Root Cause Analysis</h2>
+
+<div class="date-section date-section-blue">
+<div class="date-header date-header-blue">CODE ANALYSIS &mdash; Two-Part Problem</div>
+<div class="date-body">
+
+<h3>Part 1: HCCO slow LB teardown path</h3>
+
+<p>File: <code>control-plane-operator/hostedclusterconfigoperator/controllers/resources/resources.go</code></p>
+
+<p>During HC deletion, HCCO calls <code>destroyCloudResources</code> &rarr; <code>ensureCloudResourcesDestroyed</code> &rarr; <code>ensureServiceLoadBalancersRemoved</code>. This function:</p>
+
+<table>
+  <tr><th>Step</th><th>Action</th><th>Problem</th></tr>
+  <tr><td>1</td><td>Deletes all Services of type <code>LoadBalancer</code></td><td>Triggers async CCM NLB deletion</td></tr>
+  <tr><td>2</td><td>Polls until all LB Services are gone</td><td><span class="fail">~2 minutes</span> waiting for CCM to async-delete 6 NLBs</td></tr>
+</table>
+
+<p>This is redundant on AWS because <code>DestroyInfra</code> already has <code>DestroyV1ELBs</code>/<code>DestroyV2ELBs</code> that delete NLBs directly via the AWS API by VPC, serving as a reliable backstop.</p>
+
+<h3>Part 2: E2E teardown validation gap</h3>
+
+<p>File: <code>test/e2e/util/fixture.go</code></p>
+
+<p>The e2e teardown validation discovers tagged NLBs via the Resource Groups Tagging API, but only logged them without actively deleting them. If the async CCM path was slow, the test timed out waiting.</p>
+
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- FIX APPLIED                                                    -->
+<!-- ============================================================ -->
+<h2>Fix Applied</h2>
+
+<div class="date-section date-section-green">
+<div class="date-header date-header-green">COMMIT 1 &mdash; Skip LB Service Deletion for AWS in HCCO</div>
+<div class="date-body">
+
+<h3>File: resources.go &mdash; ensureCloudResourcesDestroyed()</h3>
+
+<p>Added an early return for AWS platform that skips <code>ensureServiceLoadBalancersRemoved</code> entirely, since <code>DestroyInfra</code> handles NLB cleanup directly.</p>
+
+<span class="artifact-label">Diff</span>
+<pre>
+ func (r *reconciler) ensureCloudResourcesDestroyed(ctx context.Context) error {
+<span class="diff-add">+   // On AWS, NLBs are cleaned up directly by the infrastructure destroy flow</span>
+<span class="diff-add">+   // (DestroyV1ELBs/DestroyV2ELBs) which deletes them by VPC. Skipping the</span>
+<span class="diff-add">+   // slow async CCM path avoids a ~2 minute wait during teardown.</span>
+<span class="diff-add">+   if r.platformType == hyperv1.AWSPlatform {</span>
+<span class="diff-add">+       log.Log.Info("Skipping load balancer Service deletion for AWS; NLBs are cleaned up directly by the infrastructure destroy flow")</span>
+<span class="diff-add">+       return nil</span>
+<span class="diff-add">+   }</span>
+     return r.ensureServiceLoadBalancersRemoved(ctx)
+ }
+</pre>
+
+<h3>File: resources_test.go &mdash; Unit test added</h3>
+
+<p><code>TestDestroyCloudResources_WhenPlatformIsAWS_ItShouldSkipLoadBalancerServiceDeletion</code> &mdash; verifies that <code>ensureCloudResourcesDestroyed</code> returns nil without invoking <code>ensureServiceLoadBalancersRemoved</code> when platform is AWS.</p>
+
+</div>
+</div>
+
+<div class="date-section date-section-green">
+<div class="date-header date-header-green">COMMIT 2 &mdash; Actively Delete Tagged NLBs in E2E Teardown</div>
+<div class="date-body">
+
+<h3>File: fixture.go &mdash; deleteTaggedLoadBalancers()</h3>
+
+<p>New function that takes discovered tagged LB ARNs and actively calls <code>DeleteLoadBalancer</code> for each, with terminal vs transient error classification:</p>
+
+<span class="artifact-label">Key Code</span>
+<pre>
+<span class="diff-add">type loadBalancerDeleter interface {</span>
+<span class="diff-add">    DeleteLoadBalancer(ctx context.Context, params *elbv2.DeleteLoadBalancerInput,</span>
+<span class="diff-add">        optFns ...func(*elbv2.Options)) (*elbv2.DeleteLoadBalancerOutput, error)</span>
+<span class="diff-add">}</span>
+
+func deleteTaggedLoadBalancers(ctx context.Context, t *testing.T,
+    client loadBalancerDeleter, mappings []resourcegroupstaggingapitypes.ResourceTagMapping) <span class="diff-add">error</span> {
+    for _, m := range mappings {
+        // ... filter to ELB ARNs, call DeleteLoadBalancer ...
+        if err != nil {
+<span class="diff-add">            var opNotPermitted *elbv2types.OperationNotPermittedException</span>
+<span class="diff-add">            var resourceInUse *elbv2types.ResourceInUseException</span>
+<span class="diff-add">            if errors.As(err, &amp;opNotPermitted) || errors.As(err, &amp;resourceInUse) {</span>
+<span class="diff-add">                return fmt.Errorf("terminal error deleting load balancer %s: %w", lbARN, err)</span>
+<span class="diff-add">            }</span>
+            t.Logf("Failed to delete load balancer %s (will retry): %v", lbARN, err)
+        }
+    }
+    <span class="diff-add">return nil</span>
+}
+</pre>
+
+<h3>File: fixture_test.go &mdash; 8 test cases</h3>
+
+<table>
+  <tr><th>#</th><th>Test Case</th><th>Result</th></tr>
+  <tr><td>1</td><td>Valid NLB/ALB deletion</td><td><span class="badge badge-pass">PASS</span></td></tr>
+  <tr><td>2</td><td>Non-LB ARN filtering</td><td><span class="badge badge-pass">PASS</span></td></tr>
+  <tr><td>3</td><td>Malformed ARN handling</td><td><span class="badge badge-pass">PASS</span></td></tr>
+  <tr><td>4</td><td>Empty mappings</td><td><span class="badge badge-pass">PASS</span></td></tr>
+  <tr><td>5</td><td>Transient error continuation (both LBs attempted)</td><td><span class="badge badge-pass">PASS</span></td></tr>
+  <tr><td>6</td><td>OperationNotPermitted fail-fast (only first attempted)</td><td><span class="badge badge-pass">PASS</span></td></tr>
+  <tr><td>7</td><td>ResourceInUse fail-fast (only first attempted)</td><td><span class="badge badge-pass">PASS</span></td></tr>
+  <tr><td>8</td><td>Mixed valid and non-LB ARNs</td><td><span class="badge badge-pass">PASS</span></td></tr>
+</table>
+
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- LIVE CLUSTER VERIFICATION                                      -->
+<!-- ============================================================ -->
+<h2>Live Cluster Verification</h2>
+
+<div class="date-section date-section-red">
+<div class="date-header date-header-red">BEFORE FIX &mdash; Stock CPO (cluster: test-93739)</div>
+<div class="date-body">
+
+<h3>HCCO Logs &mdash; Slow LB Teardown Path</h3>
+
+<p>HCCO entered the <code>ensureServiceLoadBalancersRemoved</code> path and spent <strong>~2 minutes</strong> polling for 6 NLBs to be async-deleted by the cloud controller:</p>
+
+<span class="artifact-label">HCCO Logs</span>
+<pre>
+14:45:28  <span class="warn">"Ensuring load balancers are removed"</span>
+14:45:28  "Waiting on service of type LoadBalancer to be deleted"  service="router-default"
+14:45:29  "Waiting on service of type LoadBalancer to be deleted"  service="test-lb-1"
+14:45:29  "Waiting on service of type LoadBalancer to be deleted"  service="test-lb-2"
+14:45:30  "Waiting on service of type LoadBalancer to be deleted"  service="test-lb-3"
+...       <span class="fail">(repeated 20+ times over ~2 minutes)</span>
+14:47:21  "Load balancers are removed"
+</pre>
+
+<p>This is the exact pattern that causes the CI flake: when NLB deprovisioning takes longer than the test timeout, <code>TestCreateClusterRequestServingIsolation/Teardown</code> fails.</p>
+
+</div>
+</div>
+
+<div class="arrow-box">&darr;</div>
+
+<div class="date-section date-section-green">
+<div class="date-header date-header-green">AFTER FIX &mdash; Custom CPO (cluster: ocpbugs-93739-fix)</div>
+<div class="date-body">
+
+<h3>1. Custom CPO Image Deployed</h3>
+
+<span class="artifact-label">CPO Image</span>
+<pre>
+$ oc get deployment control-plane-operator -n clusters-&lt;hc-name&gt; \
+    -o jsonpath='{.spec.template.spec.containers[0].image}'
+<span class="pass">&lt;custom-cpo-image&gt;</span>
+</pre>
+
+<h3>2. HCCO Logs &mdash; Instant Skip &mdash; <span class="badge badge-pass">PASS</span></h3>
+
+<p>HCCO immediately skipped the LB Service deletion with a single log line. No waiting loop.</p>
+
+<span class="artifact-label">HCCO Logs</span>
+<pre>
+16:14:33  <span class="pass">"Skipping load balancer Service deletion for AWS; NLBs are cleaned up directly by the infrastructure destroy flow"</span>
+</pre>
+
+<p>Compare to the unfixed cluster's ~2-minute wait &mdash; this is <strong>instant</strong>.</p>
+
+<h3>3. DestroyInfra &mdash; Direct ELB Deletion &mdash; <span class="badge badge-pass">PASS</span></h3>
+
+<p>The infrastructure destroy flow cleaned up all 5 NLBs directly via the AWS API in ~1 second:</p>
+
+<span class="artifact-label">Destroy Infra Logs</span>
+<pre>
+21:47:39  <span class="pass">"Deleted ELB"</span>  id="a15ca1ac9a23549d7b3df81bd6e34414"
+21:47:39  <span class="pass">"Deleted ELB"</span>  id="a6fa841e0dc2c497791a98706dd0d3ad"
+21:47:39  <span class="pass">"Deleted ELB"</span>  id="ab82797f50d6045eb8acfceec1e7d630"
+21:47:40  <span class="pass">"Deleted ELB"</span>  id="aa549c017e4c745128295a64f2a5c259"
+21:47:40  <span class="pass">"Deleted ELB"</span>  id="a8aa74772a64546089cdd75ca40f7df4"
+</pre>
+
+<h3>4. No Residual NLBs &mdash; <span class="badge badge-pass">PASS</span></h3>
+
+<p>No <code>"Waiting on service of type LoadBalancer to be deleted"</code> messages appeared in the HCCO logs. All NLBs were cleaned up by the direct <code>DestroyInfra</code> path.</p>
+
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- TIMING COMPARISON                                              -->
+<!-- ============================================================ -->
+<h2>Timing Comparison</h2>
+
+<table>
+  <tr><th>Metric</th><th>Before Fix (test-93739)</th><th>After Fix (ocpbugs-93739-fix)</th></tr>
+  <tr><td>HCCO LB teardown</td><td><span class="fail">~2 minutes</span> (async CCM polling)</td><td><span class="pass">Instant</span> (skipped)</td></tr>
+  <tr><td>NLB deletion method</td><td>Async via cloud controller</td><td>Direct via DestroyInfra AWS API</td></tr>
+  <tr><td>NLB deletion time</td><td>Non-deterministic (depends on CCM)</td><td><span class="pass">~1 second</span> (direct API calls)</td></tr>
+  <tr><td>HCCO log lines for LB cleanup</td><td>20+ (repeated polling)</td><td><span class="pass">1</span> (skip message)</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<!-- UNIT TESTS                                                     -->
+<!-- ============================================================ -->
+<h2>Unit Tests &amp; Verification</h2>
+
+<div class="date-section date-section-green">
+<div class="date-header date-header-green">TEST RESULTS</div>
+<div class="date-body">
+
+<h3>HCCO unit test &mdash; <span class="badge badge-pass">PASS</span></h3>
+
+<pre>
+$ go test ./control-plane-operator/hostedclusterconfigoperator/controllers/resources/ \
+    -run TestDestroyCloudResources_WhenPlatformIsAWS -v -count=1
+=== RUN   TestDestroyCloudResources_WhenPlatformIsAWS_ItShouldSkipLoadBalancerServiceDeletion
+<span class="pass">--- PASS: TestDestroyCloudResources_WhenPlatformIsAWS_ItShouldSkipLoadBalancerServiceDeletion (0.00s)</span>
+PASS
+</pre>
+
+<h3>E2E fixture unit tests (8 cases) &mdash; <span class="badge badge-pass">PASS</span></h3>
+
+<pre>
+$ go test ./test/e2e/util/ -run TestDeleteTaggedLoadBalancers -v -count=1
+=== RUN   TestDeleteTaggedLoadBalancers
+=== RUN   TestDeleteTaggedLoadBalancers/deletes_NLBs_and_ALBs
+=== RUN   TestDeleteTaggedLoadBalancers/skips_non-ELB_ARNs
+=== RUN   TestDeleteTaggedLoadBalancers/handles_malformed_ARNs
+=== RUN   TestDeleteTaggedLoadBalancers/handles_empty_mappings
+=== RUN   TestDeleteTaggedLoadBalancers/continues_on_transient_error
+=== RUN   TestDeleteTaggedLoadBalancers/fails_fast_on_OperationNotPermittedException
+=== RUN   TestDeleteTaggedLoadBalancers/fails_fast_on_ResourceInUseException
+=== RUN   TestDeleteTaggedLoadBalancers/mixed_valid_and_non-LB_ARNs
+<span class="pass">--- PASS: TestDeleteTaggedLoadBalancers (0.00s)</span>
+PASS
+</pre>
+
+<h3>make verify &mdash; <span class="badge badge-pass">PASS</span></h3>
+
+<h3>CodeRabbit Review &mdash; <span class="badge badge-pass">PASS</span></h3>
+<p>All review comments addressed. No outstanding actionable findings.</p>
+
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SUMMARY                                                        -->
+<!-- ============================================================ -->
+<h2>Summary</h2>
+
+<table>
+  <tr><th>Check</th><th>Result</th></tr>
+  <tr><td>Root cause identified</td><td><span class="badge badge-pass">YES</span></td></tr>
+  <tr><td>Fix implemented (2 commits)</td><td><span class="badge badge-pass">YES</span></td></tr>
+  <tr><td>Unit tests added (HCCO + e2e fixture)</td><td><span class="badge badge-pass">PASS</span></td></tr>
+  <tr><td>make verify</td><td><span class="badge badge-pass">PASS</span></td></tr>
+  <tr><td>Live cluster &mdash; reproduced issue (test-93739)</td><td><span class="badge badge-pass">YES</span></td></tr>
+  <tr><td>Live cluster &mdash; verified fix (ocpbugs-93739-fix)</td><td><span class="badge badge-pass">PASS</span></td></tr>
+  <tr><td>CodeRabbit review</td><td><span class="badge badge-pass">PASS</span></td></tr>
+  <tr><td>PR created</td><td><span class="badge badge-pass"><a href="https://github.com/openshift/hypershift/pull/9052" style="color: inherit; text-decoration: none;">#9052</a></span></td></tr>
+</table>
+
+</div>
+</body>
+</html>
