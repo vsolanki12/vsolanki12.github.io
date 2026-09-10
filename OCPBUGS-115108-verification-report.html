@@ -57,8 +57,9 @@
   <strong>Parent:</strong> <a href="https://redhat.atlassian.net/browse/OCPBUGS-115006">OCPBUGS-115006</a><br>
   <strong>Summary:</strong> Ingress operator enters <code>Degraded=True</code> during HyperShift guest cluster router replacement<br>
   <strong>Test date:</strong> 2026-09-10 UTC<br>
-  <strong>Validation status:</strong> <span class="badge badge-pass">RACE REPRODUCED</span>
-  <strong>Fix status:</strong> <span class="badge badge-warn">NOT IMPLEMENTED</span>
+  <strong>Validation status:</strong> <span class="badge badge-pass">RACE REPRODUCED AND FIX VERIFIED</span><br>
+  <strong>Fix status:</strong> <span class="badge badge-pass">IMPLEMENTED AND LIVE-TESTED</span><br>
+  <strong>Pull request:</strong> <a href="https://github.com/openshift/cluster-ingress-operator/pull/1583">openshift/cluster-ingress-operator#1583</a>
 </div>
 
 <h2>Executive Summary</h2>
@@ -66,9 +67,10 @@
   <ul>
     <li>The transient ingress status race was reproduced on an AWS HyperShift guest cluster.</li>
     <li>The router replacement became Ready before the Deployment became Available.</li>
-    <li>The Deployment uses <code>minReadySeconds: 30</code>, and the ingress Degraded calculation currently grants the same 30-second grace period.</li>
-    <li><span class="pass">Result:</span> <code>Degraded=True</code> appeared briefly and cleared after the replacement became Available.</li>
-    <li><span class="info">Recommended fix:</span> increase the DeploymentAvailable Degraded grace to 60 seconds, with focused regression tests and protection against hiding a sustained outage.</li>
+    <li>The fix now derives the grace as <code>MinReadySeconds + 30 seconds</code>; for <code>minReadySeconds: 30</code>, the effective grace is 60 seconds.</li>
+    <li><span class="pass">Result:</span> with the patched operator, the replacement became Available and <code>Degraded=False</code> remained stable throughout the live eviction test.</li>
+    <li><span class="info">Implementation:</span> focused regression tests cover the default, 30-second, and larger <code>MinReadySeconds</code> values.</li>
+    <li><span class="pass">PR:</span> <a href="https://github.com/openshift/cluster-ingress-operator/pull/1583">OCPBUGS-115108</a> is open against <code>openshift/cluster-ingress-operator</code>.</li>
     <li>No HyperShift-specific MonitorTest exception or broad test skip is recommended.</li>
   </ul>
 </div>
@@ -85,6 +87,8 @@
   <tr><td>Worker nodes</td><td>2</td></tr>
   <tr><td>Network</td><td>OVNKubernetes</td></tr>
   <tr><td>HyperShift source</td><td><code>3010644ff24314ef36992c57b62873fe41ba25c9</code></td></tr>
+  <tr><td>Live fix-validation cluster</td><td>IPI OpenShift 4.22.6 cluster <code>vsolanki-115108</code></td></tr>
+  <tr><td>Live validation operator</td><td>Release-4.22-compatible <code>cluster-ingress-operator</code> checkout with the same dynamic grace fix</td></tr>
 </table>
 
 <h2>Deployment and Baseline Health</h2>
@@ -198,39 +202,80 @@ old router readiness probe returned HTTP 500</code></pre>
   </div>
 </div>
 
-<h2>Suggested Fix</h2>
+<h2>Implemented Solution</h2>
 
 <div class="date-section date-section-green">
-  <div class="date-header date-header-green">PROPOSED PRODUCT FIX &mdash; cluster-ingress-operator</div>
+  <div class="date-header date-header-green">IMPLEMENTED PRODUCT FIX &mdash; cluster-ingress-operator</div>
   <div class="date-body">
-    <p>Change the <code>DeploymentAvailable</code> grace used by <code>computeIngressDegradedCondition</code> from 30 seconds to 60 seconds.</p>
+    <p>Derive the <code>DeploymentAvailable</code> grace used by <code>computeIngressDegradedCondition</code> from the router Deployment's <code>minReadySeconds</code>, plus a 30-second recovery buffer.</p>
 
-    <span class="artifact-label">Proposed change</span>
+    <span class="artifact-label">Implemented change</span>
     <pre><code>expectedConditions := []expectedCondition{
     {
         condition: IngressControllerDeploymentAvailableConditionType,
         status:    operatorv1.ConditionTrue,
-<span class="diff-del">-       gracePeriod: time.Second * 30,</span>
-<span class="diff-add">+       gracePeriod: time.Second * 60,</span>
+<span class="diff-add">+       gracePeriod: time.Duration(minReadySeconds)*time.Second + 30*time.Second,</span>
     },
 }</code></pre>
 
-    <p>This gives the replacement router time to pass readiness checks and the existing 30-second <code>minReadySeconds</code> interval before the operator reports Degraded.</p>
+    <p>The implementation uses <code>deployment.Spec.MinReadySeconds</code> at reconciliation time. When the value is zero, the existing 30-second behavior is preserved; when it is 30, the effective grace is 60 seconds.</p>
 
     <div class="note">
-      <strong>Required safety check:</strong> the implementation must not hide a sustained single-router outage indefinitely. If a blanket 60-second grace is considered too broad, make the grace conditional on an active replacement that is Ready while Deployment availability is still stabilizing.
+      <strong>Safety property:</strong> this is not an indefinite suppression. A sustained outage becomes Degraded after the configured <code>minReadySeconds</code> plus the fixed 30-second buffer.
     </div>
 
     <h3>Regression coverage</h3>
     <table>
       <tr><th>Scenario</th><th>Expected result</th></tr>
-      <tr><td>Replacement Ready, Deployment Available delayed for less than 60 seconds</td><td><span class="pass">No Degraded=True</span></td></tr>
-      <tr><td>Deployment Available remains false beyond 60 seconds</td><td><span class="fail">Degraded=True</span></td></tr>
-      <tr><td>No replacement pod becomes Ready</td><td><span class="fail">Real outage remains detectable</span></td></tr>
+      <tr><td><code>minReadySeconds=0</code></td><td>30-second grace preserves existing behavior.</td></tr>
+      <tr><td><code>minReadySeconds=30</code>, unavailable for 50 seconds</td><td><span class="pass">No Degraded=True</span></td></tr>
+      <tr><td><code>minReadySeconds=30</code>, unavailable for more than 60 seconds</td><td><span class="fail">Degraded=True</span></td></tr>
+      <tr><td><code>minReadySeconds=60</code>, unavailable for 80 seconds</td><td><span class="pass">No Degraded=True</span></td></tr>
+      <tr><td>No replacement pod becomes Ready</td><td><span class="fail">Real outage remains detectable after the dynamic grace</span></td></tr>
       <tr><td>HighlyAvailable router topology</td><td>Existing minimum/all-replica behavior remains unchanged</td></tr>
     </table>
   </div>
 </div>
+
+<h2>Implemented Fix &mdash; Live Cluster Validation</h2>
+
+<div class="date-section date-section-green">
+  <div class="date-header date-header-green">PATCHED OPERATOR EVICTION TEST</div>
+  <div class="date-body">
+    <p>The fix was tested on the <code>vsolanki-115108</code> IPI cluster running OpenShift 4.22.6. The default IngressController was temporarily reduced from two replicas to one so that a single router eviction exercised the reported path.</p>
+
+    <span class="artifact-label">Test setup</span>
+    <pre><code>Deployment:       router-default
+minReadySeconds:  30
+Initial replicas: 2
+Test replicas:    1
+Patched grace:    30s + minReadySeconds = 60s</code></pre>
+
+    <span class="artifact-label">Controlled eviction</span>
+    <pre><code>oc adm taint nodes &lt;router-node&gt; ocpbugs115108=evict:NoExecute --overwrite</code></pre>
+
+    <h3>Observed fixed behavior</h3>
+    <table>
+      <tr><th>Time (UTC)</th><th>Observation</th></tr>
+      <tr><td>09:57:12Z</td><td>Custom <code>NoExecute</code> taint applied; replacement router was Pending.</td></tr>
+      <tr><td>09:57:17Z</td><td><code>DeploymentAvailable=False</code>; <code>Degraded=False</code>.</td></tr>
+      <tr><td>09:57:18Z</td><td>Replacement router became Running and Ready on the other worker.</td></tr>
+      <tr><td>09:57:48Z</td><td>Deployment became Available after the 30-second <code>minReadySeconds</code> interval; <code>Degraded=False</code> remained unchanged.</td></tr>
+      <tr><td>09:59:19Z</td><td>Deployment remained healthy at <code>1/1/1</code>; <code>Degraded=False</code> remained stable.</td></tr>
+    </table>
+
+    <p class="pass"><strong>PASS:</strong> the patched operator allowed the replacement router to stabilize without the transient Degraded transition.</p>
+  </div>
+</div>
+
+<h3>Post-test recovery evidence</h3>
+<pre><code>IngressController replicas: 2
+Router Deployment:           replicas=2 available=2 updated=2
+Router minReadySeconds:      30
+CVO replicas/available:      1/1
+Ingress operator replicas:   1/1
+ClusterOperator ingress:     Available=True Progressing=False Degraded=False
+Temporary test taints:       none</code></pre>
 
 <h2>Validation Results</h2>
 <div class="summary">
@@ -238,9 +283,11 @@ old router readiness probe returned HTTP 500</code></pre>
     <li><span class="pass">PASS:</span> HyperShift guest cluster reached Available state.</li>
     <li><span class="pass">PASS:</span> Router replacement was scheduled and became Ready.</li>
     <li><span class="pass">PASS:</span> Transient ingress Degraded race was observed and recovered automatically.</li>
-    <li><span class="pass">PASS:</span> Final router Deployment returned to <code>1/1</code>.</li>
-    <li><span class="pass">PASS:</span> Final guest cluster health was restored.</li>
-    <li><span class="badge badge-warn">PENDING:</span> Proposed source fix has not yet been implemented or tested.</li>
+    <li><span class="pass">PASS:</span> Dynamic grace implementation passed focused ingress tests and full <code>go test ./...</code>.</li>
+    <li><span class="pass">PASS:</span> Patched live eviction test completed without <code>Degraded=True</code>.</li>
+    <li><span class="pass">PASS:</span> Final router Deployment was restored to <code>2/2</code>.</li>
+    <li><span class="pass">PASS:</span> Final cluster health was restored and all temporary test state was removed.</li>
+    <li><span class="pass">PASS:</span> Pull request <a href="https://github.com/openshift/cluster-ingress-operator/pull/1583">#1583</a> was created.</li>
   </ul>
 </div>
 
@@ -261,10 +308,11 @@ old router readiness probe returned HTTP 500</code></pre>
 <h2>Final Verdict</h2>
 <div class="summary">
   <ul>
-    <li><strong>Status:</strong> <span class="badge badge-pass">RACE REPRODUCED</span></li>
+    <li><strong>Status:</strong> <span class="badge badge-pass">FIX IMPLEMENTED AND VERIFIED</span></li>
     <li><strong>Root cause:</strong> replacement readiness completed before Deployment availability stabilization.</li>
     <li><strong>Recommended owner:</strong> <code>openshift/cluster-ingress-operator</code>.</li>
-    <li><strong>Recommended first patch:</strong> 60-second DeploymentAvailable Degraded grace plus focused unit/e2e regression coverage.</li>
+    <li><strong>Implemented patch:</strong> <code>MinReadySeconds + 30 seconds</code> DeploymentAvailable Degraded grace plus focused regression coverage.</li>
+    <li><strong>PR:</strong> <a href="https://github.com/openshift/cluster-ingress-operator/pull/1583">OCPBUGS-115108 &mdash; #1583</a>.</li>
     <li><strong>MonitorTest exception:</strong> not recommended.</li>
   </ul>
 </div>
