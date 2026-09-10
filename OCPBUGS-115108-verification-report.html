@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OCPBUGS-115108 Verification and Test Report</title>
+<style>
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; color: #333; }
+  .container { max-width: 1100px; margin: 0 auto; }
+  h1 { color: #1a1a2e; border-bottom: 3px solid #e94560; padding-bottom: 10px; }
+  h2 { color: #16213e; margin-top: 30px; border-bottom: 2px solid #0f3460; padding-bottom: 6px; }
+  h3 { color: #0f3460; margin-top: 20px; }
+  .meta { background: #fff; border-left: 4px solid #0f3460; padding: 12px 18px; margin: 16px 0; border-radius: 4px; }
+  .meta strong { color: #0f3460; }
+  pre { background: #1a1a2e; color: #e0e0e0; padding: 16px; border-radius: 6px; overflow-x: auto; font-size: 13px; line-height: 1.5; }
+  code { background: #eef1f5; padding: 2px 5px; border-radius: 3px; }
+  pre code { background: transparent; padding: 0; }
+  .pass { color: #2ecc71; font-weight: bold; }
+  .fail { color: #e74c3c; font-weight: bold; }
+  .info { color: #3498db; font-weight: bold; }
+  .warn { color: #f39c12; font-weight: bold; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th, td { border: 1px solid #ddd; padding: 10px 14px; text-align: left; vertical-align: top; }
+  th { background: #0f3460; color: #fff; }
+  tr:nth-child(even) { background: #f9f9f9; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; }
+  .badge-pass { background: #d4edda; color: #155724; }
+  .badge-warn { background: #fff3cd; color: #856404; }
+  .badge-info { background: #d1ecf1; color: #0c5460; }
+  .summary { background: #fff; border: 1px solid #ddd; padding: 16px 20px; border-radius: 6px; }
+  .summary li { margin: 8px 0; }
+  .date-section { border-radius: 6px; margin: 30px 0; }
+  .date-section-blue { border: 2px solid #0f3460; }
+  .date-section-green { border: 2px solid #27ae60; }
+  .date-section-yellow { border: 2px solid #d68910; }
+  .date-header { color: #fff; padding: 10px 18px; border-radius: 4px 4px 0 0; margin-bottom: 0; font-size: 14px; }
+  .date-header-blue { background: #0f3460; }
+  .date-header-green { background: #27ae60; }
+  .date-header-yellow { background: #d68910; }
+  .date-body { padding: 16px 20px; background: #fff; }
+  .step { background: #fff; border: 1px solid #ddd; border-left: 4px solid #0f3460; padding: 10px 18px; margin: 16px 0; border-radius: 4px; }
+  .note { background: #fff3cd; border-left: 4px solid #d68910; padding: 12px 16px; margin: 14px 0; }
+  .critical { background: #f8d7da; border-left: 4px solid #c0392b; padding: 12px 16px; margin: 14px 0; }
+  .artifact-label { display: inline-block; background: #0f3460; color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .diff-add { color: #2ecc71; }
+  .diff-del { color: #e74c3c; }
+  footer { color: #666; text-align: center; border-top: 1px solid #ddd; margin-top: 40px; padding-top: 18px; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>OCPBUGS-115108 &mdash; Verification and Test Report</h1>
+
+<div class="meta">
+  <strong>Jira:</strong> <a href="https://redhat.atlassian.net/browse/OCPBUGS-115108">OCPBUGS-115108</a><br>
+  <strong>Parent:</strong> <a href="https://redhat.atlassian.net/browse/OCPBUGS-115006">OCPBUGS-115006</a><br>
+  <strong>Summary:</strong> Ingress operator enters <code>Degraded=True</code> during HyperShift guest cluster router replacement<br>
+  <strong>Test date:</strong> 2026-09-10 UTC<br>
+  <strong>Validation status:</strong> <span class="badge badge-pass">RACE REPRODUCED</span>
+  <strong>Fix status:</strong> <span class="badge badge-warn">NOT IMPLEMENTED</span>
+</div>
+
+<h2>Executive Summary</h2>
+<div class="summary">
+  <ul>
+    <li>The transient ingress status race was reproduced on an AWS HyperShift guest cluster.</li>
+    <li>The router replacement became Ready before the Deployment became Available.</li>
+    <li>The Deployment uses <code>minReadySeconds: 30</code>, and the ingress Degraded calculation currently grants the same 30-second grace period.</li>
+    <li><span class="pass">Result:</span> <code>Degraded=True</code> appeared briefly and cleared after the replacement became Available.</li>
+    <li><span class="info">Recommended fix:</span> increase the DeploymentAvailable Degraded grace to 60 seconds, with focused regression tests and protection against hiding a sustained outage.</li>
+    <li>No HyperShift-specific MonitorTest exception or broad test skip is recommended.</li>
+  </ul>
+</div>
+
+<h2>Test Environment</h2>
+<table>
+  <tr><th>Component</th><th>Details</th></tr>
+  <tr><td>Management cluster</td><td>OpenShift 4.22.6 on AWS</td></tr>
+  <tr><td>Hosted cluster</td><td><code>hcp-115108</code></td></tr>
+  <tr><td>Guest release</td><td>OpenShift 4.22.6</td></tr>
+  <tr><td>Region</td><td><code>ap-southeast-1</code></td></tr>
+  <tr><td>Infrastructure policy</td><td><code>SingleReplica</code></td></tr>
+  <tr><td>Router replicas</td><td>1</td></tr>
+  <tr><td>Worker nodes</td><td>2</td></tr>
+  <tr><td>Network</td><td>OVNKubernetes</td></tr>
+  <tr><td>HyperShift source</td><td><code>3010644ff24314ef36992c57b62873fe41ba25c9</code></td></tr>
+</table>
+
+<h2>Deployment and Baseline Health</h2>
+
+<div class="step">
+  <h3>1. HostedCluster status</h3>
+  <span class="artifact-label">Command</span>
+  <pre><code>oc get hostedcluster hcp-115108 -n clusters -o wide</code></pre>
+  <span class="artifact-label">Output</span>
+  <pre><code>NAME         VERSION   PROGRESS   AVAILABLE   PROGRESSING   MESSAGE
+hcp-115108   4.22.6    Completed  True        False         The hosted control plane is available</code></pre>
+  <p class="pass">PASS: Hosted control plane was available before testing.</p>
+</div>
+
+<div class="step">
+  <h3>2. Router baseline</h3>
+  <span class="artifact-label">Command</span>
+  <pre><code>oc get deploy,pods -n openshift-ingress -o wide</code></pre>
+  <span class="artifact-label">Output</span>
+  <pre><code>deployment.apps/router-default   1/1   1   1
+pod/router-default-656bc8b79c-mr5qn   1/1   Running</code></pre>
+  <p class="pass">PASS: The single router replica was healthy before the eviction test.</p>
+</div>
+
+<div class="step">
+  <h3>3. Ingress ClusterOperator baseline</h3>
+  <span class="artifact-label">Command</span>
+  <pre><code>oc get co ingress -o wide</code></pre>
+  <span class="artifact-label">Output</span>
+  <pre><code>NAME      VERSION   AVAILABLE   PROGRESSING   DEGRADED
+ingress   4.22.6    True        False         False</code></pre>
+  <p class="pass">PASS: Ingress was healthy before the test.</p>
+</div>
+
+<h2>Live Cluster Test Execution</h2>
+
+<div class="date-section date-section-blue">
+  <div class="date-header date-header-blue">CONTROLLED NoExecute ROUTER REPLACEMENT TEST</div>
+  <div class="date-body">
+    <h3>Step 1 &mdash; Apply a temporary eviction taint</h3>
+    <pre><code>oc adm taint node &lt;router-node&gt; hcp-115108-repro=evict:NoExecute</code></pre>
+    <p>The router pod, replacement pod, Deployment status, ingress conditions, and events were polled continuously.</p>
+
+    <h3>Step 2 &mdash; Observe replacement and status transitions</h3>
+    <pre><code>oc get pods -n openshift-ingress -o wide
+oc get deploy router-default -n openshift-ingress -o yaml
+oc get co ingress -o yaml
+oc get events -n openshift-ingress --sort-by=.lastTimestamp</code></pre>
+
+    <h3>Step 3 &mdash; Remove the temporary taint</h3>
+    <pre><code>oc adm taint node &lt;router-node&gt; hcp-115108-repro=evict:NoExecute-</code></pre>
+  </div>
+</div>
+
+<h2>Observed Timeline</h2>
+<table>
+  <tr><th>Time</th><th>Observation</th></tr>
+  <tr><td>05:53:59Z</td><td>Ingress <code>Available=False</code>, reason <code>IngressUnavailable</code>.</td></tr>
+  <tr><td>Approximately +7 seconds</td><td>Replacement router became Running and Ready on the other worker.</td></tr>
+  <tr><td>05:54:29Z</td><td>Ingress <code>Degraded=True</code>, reason <code>IngressDegraded</code>.</td></tr>
+  <tr><td>05:54:34Z</td><td>Ingress returned to <code>Available=True</code> and <code>Degraded=False</code>.</td></tr>
+  <tr><td>05:54:35Z</td><td>Deployment reported the replacement as Available after <code>minReadySeconds</code>.</td></tr>
+</table>
+
+<h2>Relevant Cluster Events</h2>
+<pre><code>Normal   Killing
+pod/router-default-656bc8b79c-mr5qn
+Stopping container router
+
+Normal   SuccessfulCreate
+replicaset/router-default-656bc8b79c
+Created pod: router-default-656bc8b79c-ljlbj
+
+Normal   TaintManagerEviction
+pod/router-default-656bc8b79c-mr5qn
+Marking pod for deletion
+
+Normal   Pulled
+replacement router image pulled successfully
+
+Normal   Started
+replacement router container started
+
+Warning  ProbeError
+old router readiness probe returned HTTP 500</code></pre>
+
+<h2>Root Cause Analysis</h2>
+
+<div class="date-section date-section-yellow">
+  <div class="date-header date-header-yellow">READINESS / AVAILABILITY TIMING RACE</div>
+  <div class="date-body">
+    <table>
+      <tr><th>Component</th><th>Current behavior</th><th>Effect</th></tr>
+      <tr>
+        <td>HyperShift infrastructure policy</td>
+        <td><code>SingleReplica</code> maps to <code>SingleReplicaTopologyMode</code>.</td>
+        <td>Only one guest router is deployed.</td>
+      </tr>
+      <tr>
+        <td>Router Deployment</td>
+        <td><code>minReadySeconds: 30</code>.</td>
+        <td>A Ready pod is not immediately counted as Available.</td>
+      </tr>
+      <tr>
+        <td>Ingress Degraded status</td>
+        <td><code>DeploymentAvailable=False</code> has a 30-second grace period.</td>
+        <td>The grace expires at the same time as Deployment stabilization.</td>
+      </tr>
+    </table>
+    <p>The replacement router was healthy before the Deployment became Available, but the ingress operator evaluated the 30-second grace before the Deployment controller completed its availability calculation.</p>
+  </div>
+</div>
+
+<h2>Suggested Fix</h2>
+
+<div class="date-section date-section-green">
+  <div class="date-header date-header-green">PROPOSED PRODUCT FIX &mdash; cluster-ingress-operator</div>
+  <div class="date-body">
+    <p>Change the <code>DeploymentAvailable</code> grace used by <code>computeIngressDegradedCondition</code> from 30 seconds to 60 seconds.</p>
+
+    <span class="artifact-label">Proposed change</span>
+    <pre><code>expectedConditions := []expectedCondition{
+    {
+        condition: IngressControllerDeploymentAvailableConditionType,
+        status:    operatorv1.ConditionTrue,
+<span class="diff-del">-       gracePeriod: time.Second * 30,</span>
+<span class="diff-add">+       gracePeriod: time.Second * 60,</span>
+    },
+}</code></pre>
+
+    <p>This gives the replacement router time to pass readiness checks and the existing 30-second <code>minReadySeconds</code> interval before the operator reports Degraded.</p>
+
+    <div class="note">
+      <strong>Required safety check:</strong> the implementation must not hide a sustained single-router outage indefinitely. If a blanket 60-second grace is considered too broad, make the grace conditional on an active replacement that is Ready while Deployment availability is still stabilizing.
+    </div>
+
+    <h3>Regression coverage</h3>
+    <table>
+      <tr><th>Scenario</th><th>Expected result</th></tr>
+      <tr><td>Replacement Ready, Deployment Available delayed for less than 60 seconds</td><td><span class="pass">No Degraded=True</span></td></tr>
+      <tr><td>Deployment Available remains false beyond 60 seconds</td><td><span class="fail">Degraded=True</span></td></tr>
+      <tr><td>No replacement pod becomes Ready</td><td><span class="fail">Real outage remains detectable</span></td></tr>
+      <tr><td>HighlyAvailable router topology</td><td>Existing minimum/all-replica behavior remains unchanged</td></tr>
+    </table>
+  </div>
+</div>
+
+<h2>Validation Results</h2>
+<div class="summary">
+  <ul>
+    <li><span class="pass">PASS:</span> HyperShift guest cluster reached Available state.</li>
+    <li><span class="pass">PASS:</span> Router replacement was scheduled and became Ready.</li>
+    <li><span class="pass">PASS:</span> Transient ingress Degraded race was observed and recovered automatically.</li>
+    <li><span class="pass">PASS:</span> Final router Deployment returned to <code>1/1</code>.</li>
+    <li><span class="pass">PASS:</span> Final guest cluster health was restored.</li>
+    <li><span class="badge badge-warn">PENDING:</span> Proposed source fix has not yet been implemented or tested.</li>
+  </ul>
+</div>
+
+<h2>Limitations and Scope</h2>
+<div class="critical">
+  <strong>Important:</strong> the standard serial e2e taint is already tolerated by the router:
+  <code>kubernetes.io/e2e-evict-taint-key=evictTaintVal:NoExecute</code>.
+  The controlled test used a custom taint to reproduce the timing race. Therefore, this report verifies the status race but does not prove that the exact historical CI eviction used the standard e2e taint.
+</div>
+
+<ul>
+  <li>Do not add a broad MonitorTest exception.</li>
+  <li>Do not reduce <code>minReadySeconds</code> without ingress owner approval.</li>
+  <li>Do not add broad NoExecute tolerations; they could keep routers on unhealthy nodes.</li>
+  <li>The separate Available-condition work in OCPBUGS-92835 does not fully address this Degraded transition.</li>
+</ul>
+
+<h2>Final Verdict</h2>
+<div class="summary">
+  <ul>
+    <li><strong>Status:</strong> <span class="badge badge-pass">RACE REPRODUCED</span></li>
+    <li><strong>Root cause:</strong> replacement readiness completed before Deployment availability stabilization.</li>
+    <li><strong>Recommended owner:</strong> <code>openshift/cluster-ingress-operator</code>.</li>
+    <li><strong>Recommended first patch:</strong> 60-second DeploymentAvailable Degraded grace plus focused unit/e2e regression coverage.</li>
+    <li><strong>MonitorTest exception:</strong> not recommended.</li>
+  </ul>
+</div>
+
+<footer>
+  <p>OCPBUGS-115108 &mdash; HyperShift guest ingress Degraded transition</p>
+  <p>Report generated for Jira and pull-request verification use.</p>
+</footer>
+
+</div>
+</body>
+</html>
