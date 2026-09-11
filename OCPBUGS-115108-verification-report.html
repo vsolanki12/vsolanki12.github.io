@@ -55,21 +55,24 @@
 <div class="meta">
   <strong>Jira:</strong> <a href="https://redhat.atlassian.net/browse/OCPBUGS-115108">OCPBUGS-115108</a><br>
   <strong>Parent:</strong> <a href="https://redhat.atlassian.net/browse/OCPBUGS-115006">OCPBUGS-115006</a><br>
-  <strong>Summary:</strong> Ingress operator enters <code>Degraded=True</code> during HyperShift guest cluster router replacement<br>
-  <strong>Test date:</strong> 2026-09-10 UTC<br>
-  <strong>Validation status:</strong> <span class="badge badge-pass">RACE REPRODUCED AND FIX VERIFIED</span><br>
-  <strong>Fix status:</strong> <span class="badge badge-pass">IMPLEMENTED AND LIVE-TESTED</span><br>
+  <strong>Summary:</strong> Ingress operator reports <code>Degraded=True</code> during HyperShift guest-cluster initialization and router replacement<br>
+  <strong>Live test date:</strong> 2026-09-10 UTC; <strong>report update:</strong> 2026-09-11 UTC<br>
+  <strong>Validation status:</strong> <span class="badge badge-pass">RACE REPRODUCED; BOTH FIX PATHS VERIFIED</span><br>
+  <strong>Fix status:</strong> <span class="badge badge-pass">IMPLEMENTED; REPLACEMENT PATH LIVE-TESTED</span><br>
+  <strong>Fix commit:</strong> <code>5596d6c6f</code><br>
   <strong>Pull request:</strong> <a href="https://github.com/openshift/cluster-ingress-operator/pull/1583">openshift/cluster-ingress-operator#1583</a>
 </div>
 
 <h2>Executive Summary</h2>
 <div class="summary">
   <ul>
-    <li>The transient ingress status race was reproduced on an AWS HyperShift guest cluster.</li>
-    <li>The router replacement became Ready before the Deployment became Available.</li>
-    <li>The fix now derives the grace as <code>MinReadySeconds + 30 seconds</code>; for <code>minReadySeconds: 30</code>, the effective grace is 60 seconds.</li>
-    <li><span class="pass">Result:</span> with the patched operator, the replacement became Available and <code>Degraded=False</code> remained stable throughout the live eviction test.</li>
-    <li><span class="info">Implementation:</span> focused regression tests cover the default, 30-second, and larger <code>MinReadySeconds</code> values.</li>
+    <li>The transient ingress status race was reproduced on an AWS HyperShift guest cluster: the replacement router became Ready before the Deployment became Available.</li>
+    <li>During initial external-control-plane startup, the ingress operator can run before any eligible guest node exists. The router cannot schedule in that expected state, so startup-dependent conditions must not immediately make ingress Degraded.</li>
+    <li>The operator now records the initial <code>AwaitingNodes</code> state, continues evaluating load-balancer and DNS failures, and resumes normal router evaluation when the first eligible Ready node appears.</li>
+    <li>When node waiting ends, deployment, replica, and canary transition times are reset so the grace period starts at node availability.</li>
+    <li>The deployment grace is derived as <code>MinReadySeconds + 30 seconds</code>; for <code>minReadySeconds: 30</code>, the effective grace is 60 seconds.</li>
+    <li><span class="pass">Live result:</span> with the patched operator, the replacement became Available and <code>Degraded=False</code> remained stable throughout the live eviction test.</li>
+    <li><span class="info">Focused result:</span> the aged <code>AwaitingNodes</code> to Ready-node transition was validated with deterministic unit coverage.</li>
     <li><span class="pass">PR:</span> <a href="https://github.com/openshift/cluster-ingress-operator/pull/1583">OCPBUGS-115108</a> is open against <code>openshift/cluster-ingress-operator</code>.</li>
     <li>No HyperShift-specific MonitorTest exception or broad test skip is recommended.</li>
   </ul>
@@ -89,6 +92,7 @@
   <tr><td>HyperShift source</td><td><code>3010644ff24314ef36992c57b62873fe41ba25c9</code></td></tr>
   <tr><td>Live fix-validation cluster</td><td>IPI OpenShift 4.22.6 cluster <code>vsolanki-115108</code></td></tr>
   <tr><td>Live validation operator</td><td>Release-4.22-compatible <code>cluster-ingress-operator</code> checkout with the same dynamic grace fix</td></tr>
+  <tr><td>PR fix commit</td><td><code>5596d6c6f</code> (includes initial HCP node-wait handling and grace reset)</td></tr>
 </table>
 
 <h2>Deployment and Baseline Health</h2>
@@ -178,10 +182,15 @@ old router readiness probe returned HTTP 500</code></pre>
 <h2>Root Cause Analysis</h2>
 
 <div class="date-section date-section-yellow">
-  <div class="date-header date-header-yellow">READINESS / AVAILABILITY TIMING RACE</div>
+  <div class="date-header date-header-yellow">HCP STARTUP AND READINESS / AVAILABILITY TIMING WINDOWS</div>
   <div class="date-body">
     <table>
       <tr><th>Component</th><th>Current behavior</th><th>Effect</th></tr>
+      <tr>
+        <td>External-control-plane startup</td>
+        <td>The ingress operator can start before any guest worker node is Ready.</td>
+        <td>The router Deployment has no eligible node and cannot create an available replica yet.</td>
+      </tr>
       <tr>
         <td>HyperShift infrastructure policy</td>
         <td><code>SingleReplica</code> maps to <code>SingleReplicaTopologyMode</code>.</td>
@@ -197,8 +206,63 @@ old router readiness probe returned HTTP 500</code></pre>
         <td><code>DeploymentAvailable=False</code> has a 30-second grace period.</td>
         <td>The grace expires at the same time as Deployment stabilization.</td>
       </tr>
+      <tr>
+        <td>Status transition timestamps</td>
+        <td>Conditions ignored while waiting for a guest node can retain an old transition time.</td>
+        <td>When the first eligible node appears, degradation could be evaluated immediately using stale elapsed time.</td>
+      </tr>
     </table>
-    <p>The replacement router was healthy before the Deployment became Available, but the ingress operator evaluated the 30-second grace before the Deployment controller completed its availability calculation.</p>
+    <p>There are two related timing windows. During initial HCP startup, the old logic treated the expected absence of a schedulable guest node as an ingress failure after the grace expired. After node waiting ended, stale condition timestamps could make the operator evaluate the deployment grace as already expired. The fix handles the initial state explicitly and starts fresh grace periods when node availability begins.</p>
+    <p>The <a href="https://github.com/openshift/enhancements/blob/master/dev-guide/cluster-version-operator/dev/clusteroperator.md#conditions">ClusterOperator condition contract</a> is preserved: this is not a broad suppression of <code>Degraded</code>. Load-balancer and DNS failures remain evaluated, and a cluster that had initialized and then loses its eligible nodes still reports a real outage.</p>
+  </div>
+</div>
+
+<h2>HCP Initial Node-Wait Validation</h2>
+
+<div class="date-section date-section-blue">
+  <div class="date-header date-header-blue">DETERMINISTIC REGRESSION TEST FOR THE SECOND FIX</div>
+  <div class="date-body">
+    <p>The test cluster used for the live eviction validation already had guest nodes, so the exact no-guest-node initialization sequence was not claimed as a live reproduction. The initial HCP path was validated with focused unit coverage using a fake clock and synthetic Kubernetes objects.</p>
+
+    <span class="artifact-label">Test</span>
+    <pre><code>Test_resetIngressStartupConditionTransitionTimes</code></pre>
+
+    <table>
+      <tr><th>Test state</th><th>Expected result</th><th>Observed result</th></tr>
+      <tr>
+        <td>External topology, no matching Ready node, Available=False with reason <code>AwaitingNodes</code></td>
+        <td>Continue waiting; do not treat missing router replicas as a completed ingress outage.</td>
+        <td><span class="pass">PASS</span></td>
+      </tr>
+      <tr>
+        <td>Advance the fake clock by two minutes while waiting</td>
+        <td>Ensure the test exceeds the normal deployment grace and exposes stale timestamps.</td>
+        <td><span class="pass">PASS</span></td>
+      </tr>
+      <tr>
+        <td>Add a matching Ready guest node</td>
+        <td>Stop waiting and resume normal router evaluation.</td>
+        <td><span class="pass">PASS</span></td>
+      </tr>
+      <tr>
+        <td>Reset startup-dependent condition transition times</td>
+        <td>Start deployment, replica, and canary grace periods at node availability.</td>
+        <td><span class="pass">PASS</span></td>
+      </tr>
+      <tr>
+        <td>Evaluate Degraded immediately after the node appears</td>
+        <td><code>Degraded=False</code> with a retryable grace-period result, not an immediate failure.</td>
+        <td><span class="pass">PASS</span></td>
+      </tr>
+    </table>
+
+    <span class="artifact-label">Validation commands</span>
+    <pre><code>go test ./pkg/operator/controller/ingress
+go test ./...
+go vet ./...
+GOOS=linux GOARCH=amd64 go mod tidy
+GOOS=linux GOARCH=amd64 go mod vendor</code></pre>
+    <p class="pass"><strong>PASS:</strong> focused and full tests, vet, and Linux-targeted dependency verification completed successfully.</p>
   </div>
 </div>
 
@@ -207,7 +271,20 @@ old router readiness probe returned HTTP 500</code></pre>
 <div class="date-section date-section-green">
   <div class="date-header date-header-green">IMPLEMENTED PRODUCT FIX &mdash; cluster-ingress-operator</div>
   <div class="date-body">
-    <p>Derive the <code>DeploymentAvailable</code> grace used by <code>computeIngressDegradedCondition</code> from the router Deployment's <code>minReadySeconds</code>, plus a 30-second recovery buffer.</p>
+    <p>The implementation has two complementary safeguards. It avoids classifying the initial absence of an eligible guest node as an ingress outage, and it derives the <code>DeploymentAvailable</code> grace used by <code>computeIngressDegradedCondition</code> from the router Deployment's <code>minReadySeconds</code>, plus a 30-second recovery buffer.</p>
+
+    <h3>Initial HCP node handling</h3>
+    <ul>
+      <li>For external control-plane topology, the operator checks the router Deployment's node selector, required affinity, taints, unschedulable flag, and NodeReady condition.</li>
+      <li>Before the first eligible Ready node exists, the ingress status records <code>AwaitingNodes</code> and excludes only startup-dependent deployment, replica, and canary conditions from Degraded evaluation.</li>
+      <li>Load-balancer and DNS conditions continue to participate in Degraded evaluation.</li>
+      <li>Once the first eligible node appears, the operator resumes normal evaluation and resets the startup-dependent condition transition timestamps.</li>
+    </ul>
+
+    <span class="artifact-label">Node-wait transition</span>
+    <pre><code>if wasWaitingForNodes &amp;&amp; !waitingForNodes {
+    resetIngressStartupConditionTransitionTimes(updated.Status.Conditions)
+}</code></pre>
 
     <span class="artifact-label">Implemented change</span>
     <pre><code>expectedConditions := []expectedCondition{
@@ -232,17 +309,21 @@ old router readiness probe returned HTTP 500</code></pre>
       <tr><td><code>minReadySeconds=30</code>, unavailable for more than 60 seconds</td><td><span class="fail">Degraded=True</span></td></tr>
       <tr><td><code>minReadySeconds=60</code>, unavailable for 80 seconds</td><td><span class="pass">No Degraded=True</span></td></tr>
       <tr><td>No replacement pod becomes Ready</td><td><span class="fail">Real outage remains detectable after the dynamic grace</span></td></tr>
+      <tr><td>External topology with no eligible Ready node during initial startup</td><td><span class="pass">Startup-dependent router conditions do not alone cause Degraded=True</span></td></tr>
+      <tr><td>Aged <code>AwaitingNodes</code> state followed by a matching Ready node</td><td><span class="pass">Grace starts at node availability; no immediate Degraded=True</span></td></tr>
+      <tr><td>Initialized cluster loses all eligible nodes</td><td><span class="fail">Real outage remains reportable</span></td></tr>
+      <tr><td>Load-balancer or DNS failure while waiting for nodes</td><td><span class="fail">Failure remains evaluated</span></td></tr>
       <tr><td>HighlyAvailable router topology</td><td>Existing minimum/all-replica behavior remains unchanged</td></tr>
     </table>
   </div>
 </div>
 
-<h2>Implemented Fix &mdash; Live Cluster Validation</h2>
+<h2>Implemented Fix &mdash; Live Router-Replacement Validation</h2>
 
 <div class="date-section date-section-green">
   <div class="date-header date-header-green">PATCHED OPERATOR EVICTION TEST</div>
   <div class="date-body">
-    <p>The fix was tested on the <code>vsolanki-115108</code> IPI cluster running OpenShift 4.22.6. The default IngressController was temporarily reduced from two replicas to one so that a single router eviction exercised the reported path.</p>
+    <p>The replacement-router portion of the fix was tested on the <code>vsolanki-115108</code> IPI cluster running OpenShift 4.22.6. The default IngressController was temporarily reduced from two replicas to one so that a single router eviction exercised the reported path. This live test validates the Deployment availability race; the initial no-guest-node path is covered by the focused unit test above.</p>
 
     <span class="artifact-label">Test setup</span>
     <pre><code>Deployment:       router-default
@@ -283,7 +364,10 @@ Temporary test taints:       none</code></pre>
     <li><span class="pass">PASS:</span> HyperShift guest cluster reached Available state.</li>
     <li><span class="pass">PASS:</span> Router replacement was scheduled and became Ready.</li>
     <li><span class="pass">PASS:</span> Transient ingress Degraded race was observed and recovered automatically.</li>
+    <li><span class="pass">PASS:</span> Initial HCP <code>AwaitingNodes</code> handling and the transition to the first eligible Ready node passed focused unit coverage.</li>
+    <li><span class="pass">PASS:</span> Startup-dependent condition timestamps are reset when node waiting ends.</li>
     <li><span class="pass">PASS:</span> Dynamic grace implementation passed focused ingress tests and full <code>go test ./...</code>.</li>
+    <li><span class="pass">PASS:</span> Linux-targeted dependency tidy/vendor verification passed.</li>
     <li><span class="pass">PASS:</span> Patched live eviction test completed without <code>Degraded=True</code>.</li>
     <li><span class="pass">PASS:</span> Final router Deployment was restored to <code>2/2</code>.</li>
     <li><span class="pass">PASS:</span> Final cluster health was restored and all temporary test state was removed.</li>
@@ -295,23 +379,25 @@ Temporary test taints:       none</code></pre>
 <div class="critical">
   <strong>Important:</strong> the standard serial e2e taint is already tolerated by the router:
   <code>kubernetes.io/e2e-evict-taint-key=evictTaintVal:NoExecute</code>.
-  The controlled test used a custom taint to reproduce the timing race. Therefore, this report verifies the status race but does not prove that the exact historical CI eviction used the standard e2e taint.
+  The controlled test used a custom taint to reproduce the router replacement timing race. Therefore, this report verifies the replacement status race but does not prove that the exact historical CI eviction used the standard e2e taint.
 </div>
 
 <ul>
+  <li>The exact historical no-guest-node HCP initialization sequence was not claimed as a live reproduction on the test cluster because that cluster already had guest nodes. It is covered by deterministic unit tests with an aged <code>AwaitingNodes</code> state and a matching Ready node.</li>
   <li>Do not add a broad MonitorTest exception.</li>
   <li>Do not reduce <code>minReadySeconds</code> without ingress owner approval.</li>
   <li>Do not add broad NoExecute tolerations; they could keep routers on unhealthy nodes.</li>
   <li>The separate Available-condition work in OCPBUGS-92835 does not fully address this Degraded transition.</li>
+  <li>For normal upgrades and post-initialization node loss, genuine <code>Degraded</code> conditions remain reportable.</li>
 </ul>
 
 <h2>Final Verdict</h2>
 <div class="summary">
   <ul>
     <li><strong>Status:</strong> <span class="badge badge-pass">FIX IMPLEMENTED AND VERIFIED</span></li>
-    <li><strong>Root cause:</strong> replacement readiness completed before Deployment availability stabilization.</li>
+    <li><strong>Root cause:</strong> initial HCP node absence and replacement readiness could be evaluated as ingress failure before the relevant scheduling and availability transitions completed.</li>
     <li><strong>Recommended owner:</strong> <code>openshift/cluster-ingress-operator</code>.</li>
-    <li><strong>Implemented patch:</strong> <code>MinReadySeconds + 30 seconds</code> DeploymentAvailable Degraded grace plus focused regression coverage.</li>
+    <li><strong>Implemented patch:</strong> initial <code>AwaitingNodes</code> handling, fresh transition timestamps when the first eligible node appears, <code>MinReadySeconds + 30 seconds</code> DeploymentAvailable grace, and focused regression coverage.</li>
     <li><strong>PR:</strong> <a href="https://github.com/openshift/cluster-ingress-operator/pull/1583">OCPBUGS-115108 &mdash; #1583</a>.</li>
     <li><strong>MonitorTest exception:</strong> not recommended.</li>
   </ul>
@@ -319,7 +405,7 @@ Temporary test taints:       none</code></pre>
 
 <footer>
   <p>OCPBUGS-115108 &mdash; HyperShift guest ingress Degraded transition</p>
-  <p>Report generated for Jira and pull-request verification use.</p>
+  <p>Report updated 2026-09-11 for Jira and pull-request verification use.</p>
 </footer>
 
 </div>
