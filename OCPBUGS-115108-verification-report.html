@@ -58,7 +58,7 @@
   <strong>Summary:</strong> Ingress operator reports <code>Degraded=True</code> during HyperShift guest-cluster initialization and router replacement<br>
   <strong>Live test date:</strong> 2026-09-10 UTC; <strong>report update:</strong> 2026-09-11 UTC<br>
   <strong>Validation status:</strong> <span class="badge badge-pass">RACE REPRODUCED; BOTH FIX PATHS VERIFIED</span><br>
-  <strong>Fix status:</strong> <span class="badge badge-pass">IMPLEMENTED; REPLACEMENT PATH LIVE-TESTED</span><br>
+  <strong>Fix status:</strong> <span class="badge badge-pass">IMPLEMENTED; REPLACEMENT AND NODE-WAIT PATHS TESTED</span><br>
   <strong>Fix commit:</strong> <code>5596d6c6f</code><br>
   <strong>Pull request:</strong> <a href="https://github.com/openshift/cluster-ingress-operator/pull/1583">openshift/cluster-ingress-operator#1583</a>
 </div>
@@ -72,7 +72,8 @@
     <li>When node waiting ends, deployment, replica, and canary transition times are reset so the grace period starts at node availability.</li>
     <li>The deployment grace is derived as <code>MinReadySeconds + 30 seconds</code>; for <code>minReadySeconds: 30</code>, the effective grace is 60 seconds.</li>
     <li><span class="pass">Live result:</span> with the patched operator, the replacement became Available and <code>Degraded=False</code> remained stable throughout the live eviction test.</li>
-    <li><span class="info">Focused result:</span> the aged <code>AwaitingNodes</code> to Ready-node transition was validated with deterministic unit coverage.</li>
+    <li><span class="pass">Live startup result:</span> on a fresh HCP with zero guest nodes, the patched operator reported <code>Available=False, Reason=AwaitingNodes</code> and <code>Degraded=False</code> instead of treating the unschedulable router as an outage.</li>
+    <li><span class="info">Focused transition result:</span> the aged <code>AwaitingNodes</code> to Ready-node transition was validated with deterministic unit coverage; the worker bootstrap itself did not complete on the disposable live HCP.</li>
     <li><span class="pass">PR:</span> <a href="https://github.com/openshift/cluster-ingress-operator/pull/1583">OCPBUGS-115108</a> is open against <code>openshift/cluster-ingress-operator</code>.</li>
     <li>No HyperShift-specific MonitorTest exception or broad test skip is recommended.</li>
   </ul>
@@ -91,7 +92,8 @@
   <tr><td>Network</td><td>OVNKubernetes</td></tr>
   <tr><td>HyperShift source</td><td><code>3010644ff24314ef36992c57b62873fe41ba25c9</code></td></tr>
   <tr><td>Live fix-validation cluster</td><td>IPI OpenShift 4.22.6 cluster <code>vsolanki-115108</code></td></tr>
-  <tr><td>Live validation operator</td><td>Release-4.22-compatible <code>cluster-ingress-operator</code> checkout with the same dynamic grace fix</td></tr>
+  <tr><td>Live node-wait validation cluster</td><td>ROSA/HCP-style HyperShift cluster <code>hcp-115108-nodewait</code>, OpenShift 4.22.6, zero guest nodes at assertion time</td></tr>
+  <tr><td>Live validation operator</td><td>PR commit <code>5596d6c6f</code>, built for the 4.22.6 test payload and deployed by digest <code>sha256:47e53240d3bb</code></td></tr>
   <tr><td>PR fix commit</td><td><code>5596d6c6f</code> (includes initial HCP node-wait handling and grace reset)</td></tr>
 </table>
 
@@ -222,7 +224,32 @@ old router readiness probe returned HTTP 500</code></pre>
 <div class="date-section date-section-blue">
   <div class="date-header date-header-blue">DETERMINISTIC REGRESSION TEST FOR THE SECOND FIX</div>
   <div class="date-body">
-    <p>The test cluster used for the live eviction validation already had guest nodes, so the exact no-guest-node initialization sequence was not claimed as a live reproduction. The initial HCP path was validated with focused unit coverage using a fake clock and synthetic Kubernetes objects.</p>
+    <p>A separate disposable HCP cluster was created with the NodePool initially set to zero replicas. This reproduced the initial no-guest-node state live with the PR image. The first-worker transition was also modeled in focused unit coverage; the live worker bootstrap did not complete before the test window ended.</p>
+
+    <span class="artifact-label">Live no-node evidence &mdash; 2026-09-11 UTC</span>
+    <pre><code>Cluster:        hcp-115108-nodewait
+Guest nodes:    No resources found
+Operator image: quay.io/vsolanki/cluster-ingress-operator@sha256:47e53240d3bbd7ac362aaa63798124776f7fa169d97dc4e336914650b65710d2
+Router:         0/1 available; no eligible guest node
+
+ClusterOperator ingress:
+  Available=False  Progressing=True  Degraded=False
+
+IngressController/default:
+  Available=False reason=AwaitingNodes
+  message=IngressController is waiting for a ready node matching the router deployment.
+  Degraded=False</code></pre>
+    <p class="pass"><strong>PASS:</strong> with no guest nodes, the patched operator did not report Degraded solely because the router could not schedule.</p>
+
+    <span class="artifact-label">Scoped degradation check</span>
+    <pre><code>After the load-balancer condition exceeded its grace period:
+  Available=False  Progressing=True  Degraded=True
+  Degraded reason=DegradedConditions
+  cause=LoadBalancerReady=False (SyncLoadBalancerFailed)
+
+The later Degraded=True was caused by the intentionally invalid test load-balancer
+subnet state, not by DeploymentAvailable, replica availability, or the missing node.</code></pre>
+    <p class="pass"><strong>PASS:</strong> the live result preserves the ClusterOperator contract: startup-dependent router conditions are excluded while waiting, but an independent sustained infrastructure failure remains reportable.</p>
 
     <span class="artifact-label">Test</span>
     <pre><code>Test_resetIngressStartupConditionTransitionTimes</code></pre>
@@ -364,7 +391,8 @@ Temporary test taints:       none</code></pre>
     <li><span class="pass">PASS:</span> HyperShift guest cluster reached Available state.</li>
     <li><span class="pass">PASS:</span> Router replacement was scheduled and became Ready.</li>
     <li><span class="pass">PASS:</span> Transient ingress Degraded race was observed and recovered automatically.</li>
-    <li><span class="pass">PASS:</span> Initial HCP <code>AwaitingNodes</code> handling and the transition to the first eligible Ready node passed focused unit coverage.</li>
+    <li><span class="pass">PASS:</span> Live initial HCP no-node handling reported <code>AwaitingNodes</code> with <code>Degraded=False</code>.</li>
+    <li><span class="pass">PASS:</span> The transition to the first eligible Ready node and startup timestamp reset passed focused unit coverage.</li>
     <li><span class="pass">PASS:</span> Startup-dependent condition timestamps are reset when node waiting ends.</li>
     <li><span class="pass">PASS:</span> Dynamic grace implementation passed focused ingress tests and full <code>go test ./...</code>.</li>
     <li><span class="pass">PASS:</span> Linux-targeted dependency tidy/vendor verification passed.</li>
@@ -383,7 +411,8 @@ Temporary test taints:       none</code></pre>
 </div>
 
 <ul>
-  <li>The exact historical no-guest-node HCP initialization sequence was not claimed as a live reproduction on the test cluster because that cluster already had guest nodes. It is covered by deterministic unit tests with an aged <code>AwaitingNodes</code> state and a matching Ready node.</li>
+  <li>The disposable HCP worker EC2 instance launched and Ignition completed, but the guest kubelet did not register a Node during the test window. Therefore the first-worker transition is supported by deterministic unit coverage, while the no-node startup result is live evidence.</li>
+  <li>The disposable HCP used an intentionally incomplete load-balancer setup; after its independent load-balancer grace expired, <code>Degraded=True</code> was correctly reported for <code>LoadBalancerReady=False</code>.</li>
   <li>Do not add a broad MonitorTest exception.</li>
   <li>Do not reduce <code>minReadySeconds</code> without ingress owner approval.</li>
   <li>Do not add broad NoExecute tolerations; they could keep routers on unhealthy nodes.</li>
