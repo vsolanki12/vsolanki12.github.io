@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OCPBUGS-114723 Verification and Test Report</title>
+<style>
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; color: #333; }
+  .container { max-width: 1100px; margin: 0 auto; }
+  h1 { color: #1a1a2e; border-bottom: 3px solid #e94560; padding-bottom: 10px; }
+  h2 { color: #16213e; margin-top: 30px; border-bottom: 2px solid #0f3460; padding-bottom: 6px; }
+  h3 { color: #0f3460; margin-top: 20px; }
+  .meta { background: #fff; border-left: 4px solid #0f3460; padding: 12px 18px; margin: 16px 0; border-radius: 4px; }
+  .meta strong { color: #0f3460; }
+  pre { background: #1a1a2e; color: #e0e0e0; padding: 16px; border-radius: 6px; overflow-x: auto; font-size: 13px; line-height: 1.5; }
+  code { background: #eef1f5; padding: 2px 5px; border-radius: 3px; }
+  pre code { background: transparent; padding: 0; }
+  .pass { color: #2ecc71; font-weight: bold; }
+  .fail { color: #e74c3c; font-weight: bold; }
+  .info { color: #3498db; font-weight: bold; }
+  .warn { color: #f39c12; font-weight: bold; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th, td { border: 1px solid #ddd; padding: 10px 14px; text-align: left; vertical-align: top; }
+  th { background: #0f3460; color: #fff; }
+  tr:nth-child(even) { background: #f9f9f9; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; }
+  .badge-pass { background: #d4edda; color: #155724; }
+  .badge-warn { background: #fff3cd; color: #856404; }
+  .badge-info { background: #d1ecf1; color: #0c5460; }
+  .summary { background: #fff; border: 1px solid #ddd; padding: 16px 20px; border-radius: 6px; }
+  .summary li { margin: 8px 0; }
+  .date-section { border-radius: 6px; margin: 30px 0; }
+  .date-section-blue { border: 2px solid #0f3460; }
+  .date-section-green { border: 2px solid #27ae60; }
+  .date-section-yellow { border: 2px solid #d68910; }
+  .date-header { color: #fff; padding: 10px 18px; border-radius: 4px 4px 0 0; margin-bottom: 0; font-size: 14px; }
+  .date-header-blue { background: #0f3460; }
+  .date-header-green { background: #27ae60; }
+  .date-header-yellow { background: #d68910; }
+  .date-body { padding: 16px 20px; background: #fff; }
+  .step { background: #fff; border: 1px solid #ddd; border-left: 4px solid #0f3460; padding: 10px 18px; margin: 16px 0; border-radius: 4px; }
+  .note { background: #fff3cd; border-left: 4px solid #d68910; padding: 12px 16px; margin: 14px 0; }
+  .critical { background: #f8d7da; border-left: 4px solid #c0392b; padding: 12px 16px; margin: 14px 0; }
+  .artifact-label { display: inline-block; background: #0f3460; color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .footer { color: #666; text-align: center; border-top: 1px solid #ddd; margin-top: 40px; padding-top: 18px; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>OCPBUGS-114723 &mdash; Verification and Test Report</h1>
+
+<div class="meta">
+  <strong>Jira:</strong> <a href="https://issues.redhat.com/browse/OCPBUGS-114723">OCPBUGS-114723</a><br>
+  <strong>Pull request:</strong> <a href="https://github.com/openshift/hypershift/pull/9458">openshift/hypershift#9458</a><br>
+  <strong>Summary:</strong> Decouple user CA bundle reconciliation from HostedControlPlane generation changes<br>
+  <strong>Test date:</strong> 2026-09-15<br>
+  <strong>HostedCluster:</strong> <code>ocpbugs-114723</code><br>
+  <strong>Management release:</strong> OpenShift 4.22.6 on AWS, <code>ap-southeast-1</code><br>
+  <strong>Fix revision:</strong> <code>c76cd3e6a0e06dea62ed0a98aac4b3fe03215d80</code><br>
+  <strong>PR image:</strong> <code>quay.io/vsolanki/hypershift:ocpbugs-114723-c76cd3e6</code><br>
+  <strong>Validation status:</strong> <span class="badge badge-pass">PASS &mdash; USER CA BUNDLE RECONCILIATION VERIFIED</span>
+</div>
+
+<h2>Executive Summary</h2>
+<div class="summary">
+  <ul>
+    <li>A user-provided <code>HostedCluster.spec.additionalTrustBundle</code> propagated through the HostedControlPlane to the guest <code>openshift-config/user-ca-bundle</code> ConfigMap.</li>
+    <li>A source-only ConfigMap update propagated to the guest without changing the HostedControlPlane generation.</li>
+    <li>Removing the bundle removed the unused guest ConfigMap.</li>
+    <li>Pause and resume behavior was verified: reconciliation stopped while paused and resumed afterward.</li>
+    <li>A guest-side content change was repaired to match the source bundle.</li>
+    <li>A missing source generated the expected reconciliation error and recovered after source recreation.</li>
+    <li>The PR HCCO image started the <code>user-ca-bundle</code> controller and registered its watched resources.</li>
+    <li><span class="pass">Final result:</span> the OCPBUGS-114723 user CA bundle reconciliation behavior passed the tested scenarios.</li>
+  </ul>
+</div>
+
+<div class="note">
+  <strong>Data handling:</strong> kubeconfig contents, credentials, certificates, pull-secret data, and private endpoint details are excluded. The recorded hashes are SHA-256 values of test <code>ca-bundle.crt</code> data.
+</div>
+
+<h2>Scope and Test Harness</h2>
+<div class="date-section date-section-blue">
+  <div class="date-header date-header-blue">FOCUSED HCCO USER CA BUNDLE VALIDATION</div>
+  <div class="date-body">
+    <p>This report is intentionally limited to the HostedCluster Config Operator user CA bundle behavior.</p>
+    <p>For functional isolation, the management-cluster HCCO deployment ran with the PR image while the existing control-plane components remained on their known-good test images. A source ConfigMap was created, the HostedCluster reference was set, and the PR HCCO reconciled the guest target. Temporary test resources and pause state were removed after validation.</p>
+    <p>Command examples use <code>&lt;management-kubeconfig&gt;</code>, <code>&lt;guest-kubeconfig&gt;</code>, and <code>&lt;sanitized-ca-file&gt;</code> placeholders.</p>
+  </div>
+</div>
+
+<h2>Test Environment</h2>
+<table>
+  <tr><th>Component</th><th>Details</th></tr>
+  <tr><td>Management cluster</td><td>OpenShift 4.22.6 on AWS</td></tr>
+  <tr><td>HostedCluster</td><td><code>ocpbugs-114723</code></td></tr>
+  <tr><td>Control-plane namespace</td><td><code>clusters-ocpbugs-114723</code></td></tr>
+  <tr><td>Guest target</td><td><code>openshift-config/user-ca-bundle</code></td></tr>
+  <tr><td>AWS region</td><td><code>ap-southeast-1</code></td></tr>
+  <tr><td>Release image</td><td><code>quay.io/openshift-release-dev/ocp-release@sha256:4b439fabd9a53e37a7fa436e349837283d04513bc8209e643171d1b86d31b845</code></td></tr>
+  <tr><td>PR revision</td><td><code>c76cd3e6a0e06dea62ed0a98aac4b3fe03215d80</code></td></tr>
+  <tr><td>HCCO PR image</td><td><code>quay.io/vsolanki/hypershift:ocpbugs-114723-c76cd3e6</code></td></tr>
+  <tr><td>HCCO PR image digest</td><td><code>sha256:5eb905ae10379a82309c08e9fde64a0a744d30f9b4dd7b5ac8c7664c3ec5e0db</code></td></tr>
+</table>
+
+<h2>Scenario Summary</h2>
+<table>
+  <tr><th>Scenario</th><th>Expected behavior</th><th>Result</th></tr>
+  <tr><td>Baseline without a bundle</td><td>No HCP additional bundle and no guest target ConfigMap</td><td><span class="badge badge-pass">PASS</span></td></tr>
+  <tr><td>HostedCluster user path</td><td>HC source propagates to HCP and guest target</td><td><span class="badge badge-pass">PASS</span></td></tr>
+  <tr><td>Source-only data update</td><td>Guest data changes without an HCP generation change</td><td><span class="badge badge-pass">PASS</span></td></tr>
+  <tr><td>Bundle removal</td><td>Unused guest target is deleted</td><td><span class="badge badge-pass">PASS</span></td></tr>
+  <tr><td>Pause and resume</td><td>No reconciliation while paused; reconciliation resumes afterward</td><td><span class="badge badge-pass">PASS</span></td></tr>
+  <tr><td>Guest drift repair</td><td>Guest data returns to source content</td><td><span class="badge badge-pass">PASS</span></td></tr>
+  <tr><td>Missing source and recovery</td><td>Error is reported; source recreation restores the target</td><td><span class="badge badge-pass">PASS</span></td></tr>
+  <tr><td>PR image startup</td><td><code>user-ca-bundle</code> controller starts and watches inputs</td><td><span class="badge badge-pass">PASS</span></td></tr>
+</table>
+
+<h2>Baseline: No Bundle Configured</h2>
+<div class="step">
+  <h3>Commands</h3>
+  <pre><code>KUBECONFIG=&lt;management-kubeconfig&gt; \
+  oc -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 \
+  -o custom-columns='ADDITIONAL_TRUST_BUNDLE:.spec.additionalTrustBundle.name,PAUSED:.spec.pausedUntil,RELEASE:.spec.releaseImage'
+
+KUBECONFIG=&lt;guest-kubeconfig&gt; \
+  oc -n openshift-config get cm user-ca-bundle --ignore-not-found -o name</code></pre>
+  <h3>Output</h3>
+  <pre><code>ADDITIONAL_TRUST_BUNDLE   PAUSED   RELEASE
+&lt;none&gt;                    False    quay.io/openshift-release-dev/ocp-release@sha256:4b439...
+
+# The guest target command returned no resource.</code></pre>
+  <p class="pass"><strong>PASS:</strong> The clean baseline had no configured additional trust bundle and no guest target ConfigMap.</p>
+</div>
+
+<h2>Scenario 1 &mdash; HostedCluster User-Facing Propagation</h2>
+<div class="date-section date-section-green">
+  <div class="date-header date-header-green">HC &rarr; HCP &rarr; GUEST CONFIGMAP</div>
+  <div class="date-body">
+    <span class="artifact-label">Commands</span>
+    <pre><code>KUBECONFIG=&lt;management-kubeconfig&gt; \
+  oc -n clusters create configmap additional-trust-bundle-ocpbugs-114723 \
+  --from-file=ca-bundle.crt=&lt;sanitized-ca-file&gt; --dry-run=client -o yaml |
+  KUBECONFIG=&lt;management-kubeconfig&gt; oc -n clusters apply -f -
+
+KUBECONFIG=&lt;management-kubeconfig&gt; \
+  oc -n clusters patch hostedcluster ocpbugs-114723 --type=merge \
+  -p '{"spec":{"pausedUntil":"False","additionalTrustBundle":{"name":"additional-trust-bundle-ocpbugs-114723"}}}'
+
+KUBECONFIG=&lt;management-kubeconfig&gt; \
+  oc -n clusters get hc ocpbugs-114723 \
+  -o custom-columns='ADDITIONAL:.spec.additionalTrustBundle.name,PAUSED:.spec.pausedUntil'
+
+KUBECONFIG=&lt;management-kubeconfig&gt; \
+  oc -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 \
+  -o custom-columns='ADDITIONAL:.spec.additionalTrustBundle.name,PAUSED:.spec.pausedUntil'</code></pre>
+
+    <span class="artifact-label">Observed propagation</span>
+    <pre><code>HC:  ADDITIONAL additional-trust-bundle-ocpbugs-114723, PAUSED False
+HCP: ADDITIONAL user-ca-bundle,                       PAUSED False
+
+SOURCE_HASH=4958e81e8099a5813bb602dd3194fd594588a56de2f2e5b34a07761630863ec8
+GUEST_HASH=4958e81e8099a5813bb602dd3194fd594588a56de2f2e5b34a07761630863ec8
+RECREATED=true</code></pre>
+    <p>The guest ConfigMap was deliberately removed while the PR HCCO was active; HCCO recreated it with the matching source hash.</p>
+    <p class="pass"><strong>PASS:</strong> The real user-facing path reconciled successfully.</p>
+  </div>
+</div>
+
+<h2>Scenario 2 &mdash; Source-Only ConfigMap Update</h2>
+<div class="step">
+  <p>This verifies that source data updates reconcile independently of an HCP generation change.</p>
+  <span class="artifact-label">Commands</span>
+  <pre><code>old_generation=$(KUBECONFIG=&lt;management-kubeconfig&gt; \
+  oc -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 \
+  -o jsonpath='{.metadata.generation}')
+
+KUBECONFIG=&lt;management-kubeconfig&gt; \
+  oc -n clusters-ocpbugs-114723 get cm user-ca-bundle \
+  -o jsonpath='{.data.ca-bundle\.crt}' &gt; &lt;sanitized-ca-file&gt;
+
+printf '# OCPBUGS-114723 source-only update' &gt;&gt; &lt;sanitized-ca-file&gt;
+
+KUBECONFIG=&lt;management-kubeconfig&gt; \
+  oc -n clusters-ocpbugs-114723 create configmap user-ca-bundle \
+  --from-file=ca-bundle.crt=&lt;sanitized-ca-file&gt; --dry-run=client -o yaml |
+  KUBECONFIG=&lt;management-kubeconfig&gt; oc -n clusters-ocpbugs-114723 apply -f -
+
+new_generation=$(KUBECONFIG=&lt;management-kubeconfig&gt; \
+  oc -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 \
+  -o jsonpath='{.metadata.generation}')</code></pre>
+
+  <span class="artifact-label">Output</span>
+  <pre><code>GENERATIONS
+before=8 after=8
+
+SOURCE_HASH
+b7dbc756005594742fb4550338109643380d4115e45aa098a19c4accc9183a15
+
+GUEST_HASH
+b7dbc756005594742fb4550338109643380d4115e45aa098a19c4accc9183a15</code></pre>
+  <p class="pass"><strong>PASS:</strong> The source-only change propagated while the HCP generation remained unchanged.</p>
+</div>
+
+<h2>Scenario 3 &mdash; Removal</h2>
+<div class="step">
+  <span class="artifact-label">Command</span>
+  <pre><code>KUBECONFIG=&lt;management-kubeconfig&gt; \
+  oc -n clusters-ocpbugs-114723 patch hostedcontrolplane ocpbugs-114723 \
+  --type=merge -p '{"spec":{"additionalTrustBundle":null}}'</code></pre>
+  <span class="artifact-label">Output and log evidence</span>
+  <pre><code>HCP ADDITIONAL_TRUST_BUNDLE &lt;none&gt; PAUSED False
+GUEST_USER_CA_BUNDLE_DELETED=true
+
+deleted unused user-ca-bundle ConfigMap
+controller=user-ca-bundle
+namespace=openshift-config name=user-ca-bundle</code></pre>
+  <p class="pass"><strong>PASS:</strong> Removing the HCP reference removed the unused guest target.</p>
+</div>
+
+<h2>Scenario 4 &mdash; Pause and Resume</h2>
+<div class="step">
+  <span class="artifact-label">Commands</span>
+  <pre><code>KUBECONFIG=&lt;management-kubeconfig&gt; \
+  oc -n clusters-ocpbugs-114723 patch hostedcontrolplane ocpbugs-114723 \
+  --type=merge -p '{"spec":{"pausedUntil":"True","additionalTrustBundle":{"name":"user-ca-bundle"}}}'
+
+KUBECONFIG=&lt;management-kubeconfig&gt; \
+  oc -n clusters-ocpbugs-114723 patch hostedcontrolplane ocpbugs-114723 \
+  --type=merge -p '{"spec":{"pausedUntil":"False"}}'</code></pre>
+  <span class="artifact-label">Output and log evidence</span>
+  <pre><code>PAUSED True
+ADDITIONAL_TRUST_BUNDLE user-ca-bundle
+PAUSED_GUEST &lt;absent&gt;
+
+Reconciliation paused
+controller=user-ca-bundle
+pausedUntil=True
+
+After resume:
+GUEST_HASH=b7dbc756005594742fb4550338109643380d4115e45aa098a19c4accc9183a15</code></pre>
+  <p class="pass"><strong>PASS:</strong> Pause prevented reconciliation and resume restored normal reconciliation.</p>
+</div>
+
+<h2>Scenario 5 &mdash; Guest Drift Repair</h2>
+<div class="step">
+  <span class="artifact-label">Command</span>
+  <pre><code>KUBECONFIG=&lt;guest-kubeconfig&gt; \
+  oc -n openshift-config patch configmap user-ca-bundle --type=merge \
+  -p '{"data":{"ca-bundle.crt":"drifted-by-test"}}'</code></pre>
+  <p>HCCO repaired the guest target to the source content. The final hashes matched:</p>
+  <pre><code>SOURCE_HASH=b7dbc756005594742fb4550338109643380d4115e45aa098a19c4accc9183a15
+GUEST_HASH=b7dbc756005594742fb4550338109643380d4115e45aa098a19c4accc9183a15</code></pre>
+  <p class="pass"><strong>PASS:</strong> A guest-side data change was reconciled back to the source value.</p>
+</div>
+
+<h2>Scenario 6 &mdash; Missing Source and Recovery</h2>
+<div class="step">
+  <span class="artifact-label">Commands</span>
+  <pre><code>KUBECONFIG=&lt;management-kubeconfig&gt; \
+  oc -n clusters-ocpbugs-114723 delete configmap user-ca-bundle
+
+# Recreate the source with the valid, sanitized test CA file.
+KUBECONFIG=&lt;management-kubeconfig&gt; \
+  oc -n clusters-ocpbugs-114723 create configmap user-ca-bundle \
+  --from-file=ca-bundle.crt=&lt;sanitized-ca-file&gt; --dry-run=client -o yaml |
+  KUBECONFIG=&lt;management-kubeconfig&gt; oc -n clusters-ocpbugs-114723 apply -f -</code></pre>
+  <span class="artifact-label">Output and log evidence</span>
+  <pre><code>Reconciler error
+controller=user-ca-bundle
+error="failed to reconcile user cert CA bundle: cannot get AdditionalTrustBundle ConfigMap: ConfigMap "user-ca-bundle" not found"
+
+SOURCE_HASH=bcc8d792f9256fdfc32bda2091e1f12805d05d3344d4d0aca24a3fc1085e3b
+RECOVERED_GUEST_HASH=bcc8d792f9256fdfc32bda2091e1f12805d05d3344d4d0aca24a3fc1085e3b</code></pre>
+  <p class="pass"><strong>PASS:</strong> The error was observable and recovery completed after the source became available again.</p>
+</div>
+
+<h2>PR Image Startup Evidence</h2>
+<div class="date-section date-section-green">
+  <div class="date-header date-header-green">HCCO USER-CA-BUNDLE CONTROLLER STARTUP</div>
+  <div class="date-body">
+    <span class="artifact-label">Commands</span>
+    <pre><code>KUBECONFIG=&lt;management-kubeconfig&gt; \
+  oc -n clusters-ocpbugs-114723 get deploy hosted-cluster-config-operator \
+  -o custom-columns='IMAGE:.spec.template.spec.containers[0].image,READY:.status.readyReplicas'
+
+KUBECONFIG=&lt;management-kubeconfig&gt; \
+  oc -n clusters-ocpbugs-114723 logs deploy/hosted-cluster-config-operator --since=30m |
+  rg 'Starting hosted-cluster-config-operator|version:|user-ca-bundle|Starting Controller'</code></pre>
+    <span class="artifact-label">Output</span>
+    <pre><code>IMAGE quay.io/vsolanki/hypershift:ocpbugs-114723-c76cd3e6 READY 1
+
+Starting hosted-cluster-config-operator
+version: openshift/hypershift: c76cd3e6a0e06dea62ed0a98aac4b3fe03215d80. Latest supported OCP: 5.1.0
+setting up controller ... user-ca-bundle
+Starting EventSource controller=user-ca-bundle source=kind source: *v1.ConfigMap
+Starting EventSource controller=user-ca-bundle source=kind source: *v1beta1.HostedControlPlane
+Starting EventSource controller=user-ca-bundle source=kind source: *v1.ConfigMap
+Starting Controller controller=user-ca-bundle</code></pre>
+    <p class="pass"><strong>PASS:</strong> The PR image started and registered the expected controller and watched resources.</p>
+  </div>
+</div>
+
+<h2>Evidence Collection Commands</h2>
+<div class="step">
+  <pre><code>KUBECONFIG=&lt;management-kubeconfig&gt; \
+  oc -n clusters-ocpbugs-114723 get hc,hcp,cm -o wide
+
+KUBECONFIG=&lt;management-kubeconfig&gt; \
+  oc -n clusters-ocpbugs-114723 get events --sort-by=.lastTimestamp
+
+KUBECONFIG=&lt;management-kubeconfig&gt; \
+  oc -n clusters-ocpbugs-114723 logs deploy/hosted-cluster-config-operator --since=30m
+
+KUBECONFIG=&lt;guest-kubeconfig&gt; \
+  oc -n openshift-config get cm user-ca-bundle -o yaml</code></pre>
+  <p>The report records only metadata, status, controller messages, and content hashes. Raw CA data and credential-bearing command output are not included.</p>
+</div>
+
+<h2>Final State</h2>
+<div class="summary">
+  <ul>
+    <li>The HostedCluster and HostedControlPlane were unpaused.</li>
+    <li>The additional trust bundle reference was cleared.</li>
+    <li>Temporary source and guest ConfigMaps were removed where applicable.</li>
+    <li>The management HCCO deployment was restored to the normal test state.</li>
+  </ul>
+</div>
+
+<h2>Final Verdict</h2>
+<div class="summary">
+  <ul>
+    <li><strong>Status:</strong> <span class="badge badge-pass">PASS</span></li>
+    <li><strong>Verified behavior:</strong> user-facing HC propagation, source-only updates, removal, pause/resume, guest drift repair, missing-source recovery, and PR controller startup.</li>
+    <li><strong>Key proof:</strong> the guest hash matched the source hash, and the source-only update changed the guest data while the HCP generation stayed at <code>8</code>.</li>
+  </ul>
+</div>
+
+<div class="footer">
+  <p>OCPBUGS-114723 &mdash; HyperShift user CA bundle reconciliation verification</p>
+  <p>Report generated 2026-09-15 for Jira and pull-request verification use.</p>
+</div>
+
+</div>
+</body>
+</html>
