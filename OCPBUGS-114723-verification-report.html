@@ -1,347 +1,367 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OCPBUGS-114723 Verification and Test Report</title>
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OCPBUGS-114723 — Live aggregate CA bundle verification</title>
 <style>
-  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; color: #333; }
-  .container { max-width: 1100px; margin: 0 auto; }
-  h1 { color: #1a1a2e; border-bottom: 3px solid #e94560; padding-bottom: 10px; }
-  h2 { color: #16213e; margin-top: 30px; border-bottom: 2px solid #0f3460; padding-bottom: 6px; }
-  h3 { color: #0f3460; margin-top: 20px; }
-  .meta { background: #fff; border-left: 4px solid #0f3460; padding: 12px 18px; margin: 16px 0; border-radius: 4px; }
-  .meta strong { color: #0f3460; }
-  pre { background: #1a1a2e; color: #e0e0e0; padding: 16px; border-radius: 6px; overflow-x: auto; font-size: 13px; line-height: 1.5; }
-  code { background: #eef1f5; padding: 2px 5px; border-radius: 3px; }
-  pre code { background: transparent; padding: 0; }
-  .pass { color: #2ecc71; font-weight: bold; }
-  .fail { color: #e74c3c; font-weight: bold; }
-  .info { color: #3498db; font-weight: bold; }
-  .warn { color: #f39c12; font-weight: bold; }
-  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
-  th, td { border: 1px solid #ddd; padding: 10px 14px; text-align: left; vertical-align: top; }
-  th { background: #0f3460; color: #fff; }
-  tr:nth-child(even) { background: #f9f9f9; }
-  .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; }
-  .badge-pass { background: #d4edda; color: #155724; }
-  .badge-warn { background: #fff3cd; color: #856404; }
-  .badge-info { background: #d1ecf1; color: #0c5460; }
-  .summary { background: #fff; border: 1px solid #ddd; padding: 16px 20px; border-radius: 6px; }
-  .summary li { margin: 8px 0; }
-  .date-section { border-radius: 6px; margin: 30px 0; }
-  .date-section-blue { border: 2px solid #0f3460; }
-  .date-section-green { border: 2px solid #27ae60; }
-  .date-section-yellow { border: 2px solid #d68910; }
-  .date-header { color: #fff; padding: 10px 18px; border-radius: 4px 4px 0 0; margin-bottom: 0; font-size: 14px; }
-  .date-header-blue { background: #0f3460; }
-  .date-header-green { background: #27ae60; }
-  .date-header-yellow { background: #d68910; }
-  .date-body { padding: 16px 20px; background: #fff; }
-  .step { background: #fff; border: 1px solid #ddd; border-left: 4px solid #0f3460; padding: 10px 18px; margin: 16px 0; border-radius: 4px; }
-  .note { background: #fff3cd; border-left: 4px solid #d68910; padding: 12px 16px; margin: 14px 0; }
-  .critical { background: #f8d7da; border-left: 4px solid #c0392b; padding: 12px 16px; margin: 14px 0; }
-  .artifact-label { display: inline-block; background: #0f3460; color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
-  .footer { color: #666; text-align: center; border-top: 1px solid #ddd; margin-top: 40px; padding-top: 18px; font-size: 13px; }
-</style>
-</head>
-<body>
-<div class="container">
-
-<h1>OCPBUGS-114723 &mdash; Verification and Test Report</h1>
-
-<div class="meta">
-  <strong>Jira:</strong> <a href="https://issues.redhat.com/browse/OCPBUGS-114723">OCPBUGS-114723</a><br>
-  <strong>Pull request:</strong> <a href="https://github.com/openshift/hypershift/pull/9458">openshift/hypershift#9458</a><br>
-  <strong>Summary:</strong> Decouple user CA bundle reconciliation from HostedControlPlane generation changes<br>
-  <strong>Test date:</strong> 2026-09-15<br>
-  <strong>HostedCluster:</strong> <code>ocpbugs-114723</code><br>
-  <strong>Management release:</strong> OpenShift 4.22.6 on AWS, <code>ap-southeast-1</code><br>
-  <strong>Fix revision:</strong> <code>c76cd3e6a0e06dea62ed0a98aac4b3fe03215d80</code><br>
-  <strong>PR image:</strong> <code>quay.io/vsolanki/hypershift:ocpbugs-114723-c76cd3e6</code><br>
-  <strong>Validation status:</strong> <span class="badge badge-pass">PASS &mdash; USER CA BUNDLE RECONCILIATION VERIFIED</span>
-</div>
-
-<h2>Executive Summary</h2>
-<div class="summary">
-  <ul>
-    <li>A user-provided <code>HostedCluster.spec.additionalTrustBundle</code> propagated through the HostedControlPlane to the guest <code>openshift-config/user-ca-bundle</code> ConfigMap.</li>
-    <li>A source-only ConfigMap update propagated to the guest without changing the HostedControlPlane generation.</li>
-    <li>Removing the bundle removed the unused guest ConfigMap.</li>
-    <li>Pause and resume behavior was verified: reconciliation stopped while paused and resumed afterward.</li>
-    <li>A guest-side content change was repaired to match the source bundle.</li>
-    <li>A missing source generated the expected reconciliation error and recovered after source recreation.</li>
-    <li>The PR HCCO image started the <code>user-ca-bundle</code> controller and registered its watched resources.</li>
-    <li><span class="pass">Final result:</span> the OCPBUGS-114723 user CA bundle reconciliation behavior passed the tested scenarios.</li>
-  </ul>
-</div>
-
-<div class="note">
-  <strong>Data handling:</strong> kubeconfig contents, credentials, certificates, pull-secret data, and private endpoint details are excluded. The recorded hashes are SHA-256 values of test <code>ca-bundle.crt</code> data.
-</div>
-
-<h2>Scope and Test Harness</h2>
-<div class="date-section date-section-blue">
-  <div class="date-header date-header-blue">FOCUSED HCCO USER CA BUNDLE VALIDATION</div>
-  <div class="date-body">
-    <p>This report is intentionally limited to the HostedCluster Config Operator user CA bundle behavior.</p>
-    <p>For functional isolation, the management-cluster HCCO deployment ran with the PR image while the existing control-plane components remained on their known-good test images. A source ConfigMap was created, the HostedCluster reference was set, and the PR HCCO reconciled the guest target. Temporary test resources and pause state were removed after validation.</p>
-    <p>Command examples use <code>&lt;management-kubeconfig&gt;</code>, <code>&lt;guest-kubeconfig&gt;</code>, and <code>&lt;sanitized-ca-file&gt;</code> placeholders.</p>
-  </div>
-</div>
-
-<h2>Test Environment</h2>
-<table>
-  <tr><th>Component</th><th>Details</th></tr>
-  <tr><td>Management cluster</td><td>OpenShift 4.22.6 on AWS</td></tr>
-  <tr><td>HostedCluster</td><td><code>ocpbugs-114723</code></td></tr>
-  <tr><td>Control-plane namespace</td><td><code>clusters-ocpbugs-114723</code></td></tr>
-  <tr><td>Guest target</td><td><code>openshift-config/user-ca-bundle</code></td></tr>
-  <tr><td>AWS region</td><td><code>ap-southeast-1</code></td></tr>
-  <tr><td>Release image</td><td><code>quay.io/openshift-release-dev/ocp-release@sha256:4b439fabd9a53e37a7fa436e349837283d04513bc8209e643171d1b86d31b845</code></td></tr>
-  <tr><td>PR revision</td><td><code>c76cd3e6a0e06dea62ed0a98aac4b3fe03215d80</code></td></tr>
-  <tr><td>HCCO PR image</td><td><code>quay.io/vsolanki/hypershift:ocpbugs-114723-c76cd3e6</code></td></tr>
-  <tr><td>HCCO PR image digest</td><td><code>sha256:5eb905ae10379a82309c08e9fde64a0a744d30f9b4dd7b5ac8c7664c3ec5e0db</code></td></tr>
-</table>
-
-<h2>Scenario Summary</h2>
-<table>
-  <tr><th>Scenario</th><th>Expected behavior</th><th>Result</th></tr>
-  <tr><td>Baseline without a bundle</td><td>No HCP additional bundle and no guest target ConfigMap</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>HostedCluster user path</td><td>HC source propagates to HCP and guest target</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>Source-only data update</td><td>Guest data changes without an HCP generation change</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>Bundle removal</td><td>Unused guest target is deleted</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>Pause and resume</td><td>No reconciliation while paused; reconciliation resumes afterward</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>Guest drift repair</td><td>Guest data returns to source content</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>Missing source and recovery</td><td>Error is reported; source recreation restores the target</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>PR image startup</td><td><code>user-ca-bundle</code> controller starts and watches inputs</td><td><span class="badge badge-pass">PASS</span></td></tr>
-</table>
-
-<h2>Baseline: No Bundle Configured</h2>
-<div class="step">
-  <h3>Commands</h3>
-  <pre><code>KUBECONFIG=&lt;management-kubeconfig&gt; \
-  oc -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 \
-  -o custom-columns='ADDITIONAL_TRUST_BUNDLE:.spec.additionalTrustBundle.name,PAUSED:.spec.pausedUntil,RELEASE:.spec.releaseImage'
-
-KUBECONFIG=&lt;guest-kubeconfig&gt; \
-  oc -n openshift-config get cm user-ca-bundle --ignore-not-found -o name</code></pre>
-  <h3>Output</h3>
-  <pre><code>ADDITIONAL_TRUST_BUNDLE   PAUSED   RELEASE
-&lt;none&gt;                    False    quay.io/openshift-release-dev/ocp-release@sha256:4b439...
-
-# The guest target command returned no resource.</code></pre>
-  <p class="pass"><strong>PASS:</strong> The clean baseline had no configured additional trust bundle and no guest target ConfigMap.</p>
-</div>
-
-<h2>Scenario 1 &mdash; HostedCluster User-Facing Propagation</h2>
-<div class="date-section date-section-green">
-  <div class="date-header date-header-green">HC &rarr; HCP &rarr; GUEST CONFIGMAP</div>
-  <div class="date-body">
-    <span class="artifact-label">Commands</span>
-    <pre><code>KUBECONFIG=&lt;management-kubeconfig&gt; \
-  oc -n clusters create configmap additional-trust-bundle-ocpbugs-114723 \
-  --from-file=ca-bundle.crt=&lt;sanitized-ca-file&gt; --dry-run=client -o yaml |
-  KUBECONFIG=&lt;management-kubeconfig&gt; oc -n clusters apply -f -
-
-KUBECONFIG=&lt;management-kubeconfig&gt; \
-  oc -n clusters patch hostedcluster ocpbugs-114723 --type=merge \
-  -p '{"spec":{"pausedUntil":"False","additionalTrustBundle":{"name":"additional-trust-bundle-ocpbugs-114723"}}}'
-
-KUBECONFIG=&lt;management-kubeconfig&gt; \
-  oc -n clusters get hc ocpbugs-114723 \
-  -o custom-columns='ADDITIONAL:.spec.additionalTrustBundle.name,PAUSED:.spec.pausedUntil'
-
-KUBECONFIG=&lt;management-kubeconfig&gt; \
-  oc -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 \
-  -o custom-columns='ADDITIONAL:.spec.additionalTrustBundle.name,PAUSED:.spec.pausedUntil'</code></pre>
-
-    <span class="artifact-label">Observed propagation</span>
-    <pre><code>HC:  ADDITIONAL additional-trust-bundle-ocpbugs-114723, PAUSED False
-HCP: ADDITIONAL user-ca-bundle,                       PAUSED False
-
-SOURCE_HASH=4958e81e8099a5813bb602dd3194fd594588a56de2f2e5b34a07761630863ec8
-GUEST_HASH=4958e81e8099a5813bb602dd3194fd594588a56de2f2e5b34a07761630863ec8
-RECREATED=true</code></pre>
-    <p>The guest ConfigMap was deliberately removed while the PR HCCO was active; HCCO recreated it with the matching source hash.</p>
-    <p class="pass"><strong>PASS:</strong> The real user-facing path reconciled successfully.</p>
-  </div>
-</div>
-
-<h2>Scenario 2 &mdash; Source-Only ConfigMap Update</h2>
-<div class="step">
-  <p>This verifies that source data updates reconcile independently of an HCP generation change.</p>
-  <span class="artifact-label">Commands</span>
-  <pre><code>old_generation=$(KUBECONFIG=&lt;management-kubeconfig&gt; \
-  oc -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 \
-  -o jsonpath='{.metadata.generation}')
-
-KUBECONFIG=&lt;management-kubeconfig&gt; \
-  oc -n clusters-ocpbugs-114723 get cm user-ca-bundle \
-  -o jsonpath='{.data.ca-bundle\.crt}' &gt; &lt;sanitized-ca-file&gt;
-
-printf '# OCPBUGS-114723 source-only update' &gt;&gt; &lt;sanitized-ca-file&gt;
-
-KUBECONFIG=&lt;management-kubeconfig&gt; \
-  oc -n clusters-ocpbugs-114723 create configmap user-ca-bundle \
-  --from-file=ca-bundle.crt=&lt;sanitized-ca-file&gt; --dry-run=client -o yaml |
-  KUBECONFIG=&lt;management-kubeconfig&gt; oc -n clusters-ocpbugs-114723 apply -f -
-
-new_generation=$(KUBECONFIG=&lt;management-kubeconfig&gt; \
-  oc -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 \
-  -o jsonpath='{.metadata.generation}')</code></pre>
-
-  <span class="artifact-label">Output</span>
-  <pre><code>GENERATIONS
-before=8 after=8
-
-SOURCE_HASH
-b7dbc756005594742fb4550338109643380d4115e45aa098a19c4accc9183a15
-
-GUEST_HASH
-b7dbc756005594742fb4550338109643380d4115e45aa098a19c4accc9183a15</code></pre>
-  <p class="pass"><strong>PASS:</strong> The source-only change propagated while the HCP generation remained unchanged.</p>
-</div>
-
-<h2>Scenario 3 &mdash; Removal</h2>
-<div class="step">
-  <span class="artifact-label">Command</span>
-  <pre><code>KUBECONFIG=&lt;management-kubeconfig&gt; \
-  oc -n clusters-ocpbugs-114723 patch hostedcontrolplane ocpbugs-114723 \
-  --type=merge -p '{"spec":{"additionalTrustBundle":null}}'</code></pre>
-  <span class="artifact-label">Output and log evidence</span>
-  <pre><code>HCP ADDITIONAL_TRUST_BUNDLE &lt;none&gt; PAUSED False
-GUEST_USER_CA_BUNDLE_DELETED=true
-
-deleted unused user-ca-bundle ConfigMap
-controller=user-ca-bundle
-namespace=openshift-config name=user-ca-bundle</code></pre>
-  <p class="pass"><strong>PASS:</strong> Removing the HCP reference removed the unused guest target.</p>
-</div>
-
-<h2>Scenario 4 &mdash; Pause and Resume</h2>
-<div class="step">
-  <span class="artifact-label">Commands</span>
-  <pre><code>KUBECONFIG=&lt;management-kubeconfig&gt; \
-  oc -n clusters-ocpbugs-114723 patch hostedcontrolplane ocpbugs-114723 \
-  --type=merge -p '{"spec":{"pausedUntil":"True","additionalTrustBundle":{"name":"user-ca-bundle"}}}'
-
-KUBECONFIG=&lt;management-kubeconfig&gt; \
-  oc -n clusters-ocpbugs-114723 patch hostedcontrolplane ocpbugs-114723 \
-  --type=merge -p '{"spec":{"pausedUntil":"False"}}'</code></pre>
-  <span class="artifact-label">Output and log evidence</span>
-  <pre><code>PAUSED True
-ADDITIONAL_TRUST_BUNDLE user-ca-bundle
-PAUSED_GUEST &lt;absent&gt;
-
-Reconciliation paused
-controller=user-ca-bundle
-pausedUntil=True
-
-After resume:
-GUEST_HASH=b7dbc756005594742fb4550338109643380d4115e45aa098a19c4accc9183a15</code></pre>
-  <p class="pass"><strong>PASS:</strong> Pause prevented reconciliation and resume restored normal reconciliation.</p>
-</div>
-
-<h2>Scenario 5 &mdash; Guest Drift Repair</h2>
-<div class="step">
-  <span class="artifact-label">Command</span>
-  <pre><code>KUBECONFIG=&lt;guest-kubeconfig&gt; \
-  oc -n openshift-config patch configmap user-ca-bundle --type=merge \
-  -p '{"data":{"ca-bundle.crt":"drifted-by-test"}}'</code></pre>
-  <p>HCCO repaired the guest target to the source content. The final hashes matched:</p>
-  <pre><code>SOURCE_HASH=b7dbc756005594742fb4550338109643380d4115e45aa098a19c4accc9183a15
-GUEST_HASH=b7dbc756005594742fb4550338109643380d4115e45aa098a19c4accc9183a15</code></pre>
-  <p class="pass"><strong>PASS:</strong> A guest-side data change was reconciled back to the source value.</p>
-</div>
-
-<h2>Scenario 6 &mdash; Missing Source and Recovery</h2>
-<div class="step">
-  <span class="artifact-label">Commands</span>
-  <pre><code>KUBECONFIG=&lt;management-kubeconfig&gt; \
-  oc -n clusters-ocpbugs-114723 delete configmap user-ca-bundle
-
-# Recreate the source with the valid, sanitized test CA file.
-KUBECONFIG=&lt;management-kubeconfig&gt; \
-  oc -n clusters-ocpbugs-114723 create configmap user-ca-bundle \
-  --from-file=ca-bundle.crt=&lt;sanitized-ca-file&gt; --dry-run=client -o yaml |
-  KUBECONFIG=&lt;management-kubeconfig&gt; oc -n clusters-ocpbugs-114723 apply -f -</code></pre>
-  <span class="artifact-label">Output and log evidence</span>
-  <pre><code>Reconciler error
-controller=user-ca-bundle
-error="failed to reconcile user cert CA bundle: cannot get AdditionalTrustBundle ConfigMap: ConfigMap "user-ca-bundle" not found"
-
-SOURCE_HASH=bcc8d792f9256fdfc32bda2091e1f12805d05d3344d4d0aca24a3fc1085e3b
-RECOVERED_GUEST_HASH=bcc8d792f9256fdfc32bda2091e1f12805d05d3344d4d0aca24a3fc1085e3b</code></pre>
-  <p class="pass"><strong>PASS:</strong> The error was observable and recovery completed after the source became available again.</p>
-</div>
-
-<h2>PR Image Startup Evidence</h2>
-<div class="date-section date-section-green">
-  <div class="date-header date-header-green">HCCO USER-CA-BUNDLE CONTROLLER STARTUP</div>
-  <div class="date-body">
-    <span class="artifact-label">Commands</span>
-    <pre><code>KUBECONFIG=&lt;management-kubeconfig&gt; \
-  oc -n clusters-ocpbugs-114723 get deploy hosted-cluster-config-operator \
-  -o custom-columns='IMAGE:.spec.template.spec.containers[0].image,READY:.status.readyReplicas'
-
-KUBECONFIG=&lt;management-kubeconfig&gt; \
-  oc -n clusters-ocpbugs-114723 logs deploy/hosted-cluster-config-operator --since=30m |
-  rg 'Starting hosted-cluster-config-operator|version:|user-ca-bundle|Starting Controller'</code></pre>
-    <span class="artifact-label">Output</span>
-    <pre><code>IMAGE quay.io/vsolanki/hypershift:ocpbugs-114723-c76cd3e6 READY 1
-
-Starting hosted-cluster-config-operator
-version: openshift/hypershift: c76cd3e6a0e06dea62ed0a98aac4b3fe03215d80. Latest supported OCP: 5.1.0
-setting up controller ... user-ca-bundle
-Starting EventSource controller=user-ca-bundle source=kind source: *v1.ConfigMap
-Starting EventSource controller=user-ca-bundle source=kind source: *v1beta1.HostedControlPlane
-Starting EventSource controller=user-ca-bundle source=kind source: *v1.ConfigMap
-Starting Controller controller=user-ca-bundle</code></pre>
-    <p class="pass"><strong>PASS:</strong> The PR image started and registered the expected controller and watched resources.</p>
-  </div>
-</div>
-
-<h2>Evidence Collection Commands</h2>
-<div class="step">
-  <pre><code>KUBECONFIG=&lt;management-kubeconfig&gt; \
-  oc -n clusters-ocpbugs-114723 get hc,hcp,cm -o wide
-
-KUBECONFIG=&lt;management-kubeconfig&gt; \
-  oc -n clusters-ocpbugs-114723 get events --sort-by=.lastTimestamp
-
-KUBECONFIG=&lt;management-kubeconfig&gt; \
-  oc -n clusters-ocpbugs-114723 logs deploy/hosted-cluster-config-operator --since=30m
-
-KUBECONFIG=&lt;guest-kubeconfig&gt; \
-  oc -n openshift-config get cm user-ca-bundle -o yaml</code></pre>
-  <p>The report records only metadata, status, controller messages, and content hashes. Raw CA data and credential-bearing command output are not included.</p>
-</div>
-
-<h2>Final State</h2>
-<div class="summary">
-  <ul>
-    <li>The HostedCluster and HostedControlPlane were unpaused.</li>
-    <li>The additional trust bundle reference was cleared.</li>
-    <li>Temporary source and guest ConfigMaps were removed where applicable.</li>
-    <li>The management HCCO deployment was restored to the normal test state.</li>
-  </ul>
-</div>
-
-<h2>Final Verdict</h2>
-<div class="summary">
-  <ul>
-    <li><strong>Status:</strong> <span class="badge badge-pass">PASS</span></li>
-    <li><strong>Verified behavior:</strong> user-facing HC propagation, source-only updates, removal, pause/resume, guest drift repair, missing-source recovery, and PR controller startup.</li>
-    <li><strong>Key proof:</strong> the guest hash matched the source hash, and the source-only update changed the guest data while the HCP generation stayed at <code>8</code>.</li>
-  </ul>
-</div>
-
-<div class="footer">
-  <p>OCPBUGS-114723 &mdash; HyperShift user CA bundle reconciliation verification</p>
-  <p>Report generated 2026-09-15 for Jira and pull-request verification use.</p>
-</div>
-
-</div>
-</body>
-</html>
+body{font-family:'Segoe UI',Tahoma,sans-serif;margin:0;padding:24px;background:#f5f5f5;color:#333;line-height:1.55}.container{max-width:1100px;margin:auto}h1{color:#1a1a2e;border-bottom:3px solid #e94560;padding-bottom:12px}h2{color:#16213e;border-bottom:2px solid #0f3460;padding-bottom:6px;margin-top:32px}h3{color:#0f3460}
+.panel{background:white;border:1px solid #ddd;border-radius:6px;padding:16px 20px;margin:16px 0}.success{border-left:5px solid #27ae60}.note{border-left:5px solid #d68910;background:#fff8e5}
+table{width:100%;border-collapse:collapse;margin:16px 0;background:white}th,td{padding:10px 12px;border:1px solid #ddd;text-align:left;vertical-align:top;overflow-wrap:anywhere}th{background:#0f3460;color:white}tr:nth-child(even){background:#f9f9f9}
+code{background:#eef1f5;padding:2px 4px;border-radius:3px;overflow-wrap:anywhere}pre{background:#1a1a2e;color:#e0e0e0;padding:16px;border-radius:6px;overflow-x:auto;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}pre code{background:transparent;padding:0}
+.badge{display:inline-block;border-radius:12px;padding:2px 9px;font-size:12px;font-weight:bold;background:#d4edda;color:#155724}.reproduced{background:#d1ecf1;color:#0c5460}a{color:#0f3460}li{margin:6px 0}summary{cursor:pointer;font-weight:600;color:#0f3460}details{margin:12px 0}small{color:#555}@media(max-width:600px){body{padding:12px}td,th{padding:8px}.panel{padding:12px}}@media print{body{background:white}pre{color:black;background:#eee}details{display:block}}
+</style></head><body><main class="container">
+<h1>OCPBUGS-114723 — Live aggregate CA bundle verification</h1>
+<p><a href="https://github.com/openshift/hypershift/pull/9458">PR #9458</a> · <a href="https://github.com/openshift/hypershift/pull/9458#issuecomment-5688825083">Reviewer request</a> · 16 September 2026</p>
+<div class="panel success"><strong>PASS — two prior-image regressions reproduced; all tested fixed-image paths passed.</strong><ul><li>Both reviewer-identified failures were reproduced with the previous PR image: combined input omitted the proxy CA, and proxy-only input left the guest ConfigMap absent.</li><li>The patched image copied CPO’s trusted-ca-bundle-managed contents correctly for additional-only, proxy-only, and combined input.</li><li>Updating either CA source changed the guest bundle while HCP generation stayed at 15.</li><li>Reference removal and renaming, drift repair, ConfigMap recreation, pause/resume, and missing-source recovery passed.</li><li>The image digest and embedded working-patch marker were verified on the live HCCO pod.</li><li>All three operator deployments were restored and Ready; temporary CA references and ConfigMaps were removed.</li></ul></div>
+<h2>Image and environment</h2><table><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody>
+<tr><td>Test window (UTC)</td><td>2026-09-16 04:17–04:22; final cleanup checked at 04:23</td></tr>
+<tr><td>HostedCluster / namespace</td><td>ocpbugs-114723 / clusters-ocpbugs-114723</td></tr>
+<tr><td>Hosted release</td><td>OpenShift 4.22.6</td></tr>
+<tr><td>Pushed PR commit</td><td><a href="https://github.com/openshift/hypershift/pull/9458/commits/e6fdc8a8972099815c510062edc8b784e223bdc8">e6fdc8a8972099815c510062edc8b784e223bdc8</a></td></tr>
+<tr><td>Image build base revision</td><td>c76cd3e6a0e06dea62ed0a98aac4b3fe03215d80</td></tr>
+<tr><td>Working patch SHA-256</td><td>105dcee2272a6c8f7d07123a18e66fdc4eabc40f17ef5443f2e6557d8519d2b7</td></tr>
+<tr><td>Test image tag</td><td>quay.io/vsolanki/hypershift:ocpbugs-114723-review-105dcee2272a</td></tr>
+<tr><td>Tested image digest</td><td>quay.io/vsolanki/hypershift@sha256:a1b350be69b2db377cb66488ff8007759998c5cf4b2e0294a6a8235695f4cfff</td></tr>
+<tr><td>Embedded binary identity</td><td>c76cd3e6a0e06dea62ed0a98aac4b3fe03215d80-review-105dcee2272a</td></tr>
+<tr><td>Source status</td><td>The review changes are committed and pushed as e6fdc8a897. The image was built before the amended commit was finalized; its build base plus working-patch digest identifies the same source changes. The patch digest was checked again before pushing.</td></tr>
+</tbody></table>
+<p><small>The binary log's “Latest supported OCP: 5.1.0” value is support-version metadata, not the installed hosted release. This run used OpenShift 4.22.6.</small></p>
+<h2>Test scope</h2><div class="panel"><p>The first scenario used HostedCluster.spec.additionalTrustBundle and HostedCluster.spec.configuration.proxy.trustedCA to produce the managed bundle through the normal HC → HCP → CPO path. The remaining controller tests modified HCP references and control-plane source ConfigMaps directly while the management operator was temporarily scaled down. CPO remained active to build the aggregate, except during the deliberate missing-managed-source test. The guest target was always openshift-config/user-ca-bundle.</p></div><div class="panel note">Re-adding the proxy reference requires its source ConfigMap to exist. The existing resources controller removed that source during the reference-removal test; it was recreated before continuing, and the reusable test script includes that setup step.</div>
+<h2>Functional results</h2><table><thead><tr><th>UTC</th><th>Scenario</th><th>Result</th></tr></thead><tbody><tr><td>04:17:26</td><td>before fix: both references</td><td><span class="badge reproduced">REPRODUCED</span></td></tr><tr><td>04:17:31</td><td>before fix: proxy only</td><td><span class="badge reproduced">REPRODUCED</span></td></tr><tr><td>04:18:51</td><td>after fix: proxy only</td><td><span class="badge ">PASS</span></td></tr><tr><td>04:18:56</td><td>after fix: both references</td><td><span class="badge ">PASS</span></td></tr><tr><td>04:19:02</td><td>additional CA data update without HCP generation change</td><td><span class="badge ">PASS</span></td></tr><tr><td>04:19:07</td><td>proxy CA data update without HCP generation change</td><td><span class="badge ">PASS</span></td></tr><tr><td>04:19:12</td><td>remove proxy reference while additional CA remains</td><td><span class="badge ">PASS</span></td></tr><tr><td>04:19:13</td><td>remove all references</td><td><span class="badge ">PASS</span></td></tr><tr><td>04:19:18</td><td>additional trust bundle only</td><td><span class="badge ">PASS</span></td></tr><tr><td>04:20:34</td><td>restore both references</td><td><span class="badge ">PASS</span></td></tr><tr><td>04:20:39</td><td>remove additional reference while proxy CA remains</td><td><span class="badge ">PASS</span></td></tr><tr><td>04:20:44</td><td>proxy trusted CA reference rename</td><td><span class="badge ">PASS</span></td></tr><tr><td>04:20:46</td><td>guest drift repair</td><td><span class="badge ">PASS</span></td></tr><tr><td>04:20:49</td><td>guest deletion and recreation</td><td><span class="badge ">PASS</span></td></tr><tr><td>04:21:04</td><td>pause gate</td><td><span class="badge ">PASS</span></td></tr><tr><td>04:21:06</td><td>resume after pause</td><td><span class="badge ">PASS</span></td></tr><tr><td>04:21:12</td><td>missing managed source preserves guest data</td><td><span class="badge ">PASS</span></td></tr><tr><td>04:21:20</td><td>managed source recovery with new CA data</td><td><span class="badge ">PASS</span></td></tr><tr><td>04:21:21</td><td>final reference cleanup</td><td><span class="badge ">PASS</span></td></tr></tbody></table>
+<h2>Hash and lifecycle evidence</h2><details class="panel"><summary>before fix: both references</summary><pre><code>expected_aggregate_sha256: f380c65c6700681013d7ab5194bd2efd6d1f58d24fa52ce28b31495c8dd9d53c
+observed_guest_sha256: 877155e8e66c251792237981b13b233caa4006833bb0f1b975405ec4a46a8dfa
+proxy_CA_missing: true</code></pre></details>
+<details class="panel"><summary>before fix: proxy only</summary><pre><code>managed_bundle_sha256: 3256ff33abdf76bcface23ac2c9e8e7b0a09908ebdf9aaecc59945718473f6ee
+guest_bundle_absent: true</code></pre></details>
+<details class="panel"><summary>after fix: proxy only</summary><pre><code>hcp_generation: 14
+source_sha256: 3256ff33abdf76bcface23ac2c9e8e7b0a09908ebdf9aaecc59945718473f6ee
+guest_sha256: 3256ff33abdf76bcface23ac2c9e8e7b0a09908ebdf9aaecc59945718473f6ee
+guest_uid: ba63fa40-8649-4ed1-aa5e-16ffd68ad34d</code></pre></details>
+<details class="panel"><summary>after fix: both references</summary><pre><code>hcp_generation: 15
+source_sha256: f380c65c6700681013d7ab5194bd2efd6d1f58d24fa52ce28b31495c8dd9d53c
+guest_sha256: f380c65c6700681013d7ab5194bd2efd6d1f58d24fa52ce28b31495c8dd9d53c
+guest_uid: ba63fa40-8649-4ed1-aa5e-16ffd68ad34d</code></pre></details>
+<details class="panel"><summary>additional CA data update without HCP generation change</summary><pre><code>hcp_generation: 15
+source_sha256: 8581a7af2be26e211a9ff69dadb437988048be3e059cd44d7d6a5ae0a4898fcf
+guest_sha256: 8581a7af2be26e211a9ff69dadb437988048be3e059cd44d7d6a5ae0a4898fcf
+guest_uid: ba63fa40-8649-4ed1-aa5e-16ffd68ad34d</code></pre></details>
+<details class="panel"><summary>proxy CA data update without HCP generation change</summary><pre><code>hcp_generation: 15
+source_sha256: 252036ec7c231831f4d7634e87ef0f5daa63d629ac01810712dd23a8a2e4180e
+guest_sha256: 252036ec7c231831f4d7634e87ef0f5daa63d629ac01810712dd23a8a2e4180e
+guest_uid: ba63fa40-8649-4ed1-aa5e-16ffd68ad34d</code></pre></details>
+<details class="panel"><summary>remove proxy reference while additional CA remains</summary><pre><code>hcp_generation: 16
+source_sha256: af3fddc9c163d2e3afbbb17622966c34fc71379ee58f231ae8f0b58384aa59f0
+guest_sha256: af3fddc9c163d2e3afbbb17622966c34fc71379ee58f231ae8f0b58384aa59f0
+guest_uid: ba63fa40-8649-4ed1-aa5e-16ffd68ad34d</code></pre></details>
+<details class="panel"><summary>remove all references</summary><pre><code>guest_bundle_absent: true</code></pre></details>
+<details class="panel"><summary>additional trust bundle only</summary><pre><code>hcp_generation: 18
+source_sha256: af3fddc9c163d2e3afbbb17622966c34fc71379ee58f231ae8f0b58384aa59f0
+guest_sha256: af3fddc9c163d2e3afbbb17622966c34fc71379ee58f231ae8f0b58384aa59f0
+guest_uid: 28c30b3e-eab9-4bd3-9395-5336e9380c50</code></pre></details>
+<details class="panel"><summary>restore both references</summary><pre><code>hcp_generation: 19
+source_sha256: 252036ec7c231831f4d7634e87ef0f5daa63d629ac01810712dd23a8a2e4180e
+guest_sha256: 252036ec7c231831f4d7634e87ef0f5daa63d629ac01810712dd23a8a2e4180e
+guest_uid: 28c30b3e-eab9-4bd3-9395-5336e9380c50</code></pre></details>
+<details class="panel"><summary>remove additional reference while proxy CA remains</summary><pre><code>hcp_generation: 20
+source_sha256: 1010765c48e4cbd4e939b80df0d816496d12f2b938ee41db4923e0377a062e4e
+guest_sha256: 1010765c48e4cbd4e939b80df0d816496d12f2b938ee41db4923e0377a062e4e
+guest_uid: 28c30b3e-eab9-4bd3-9395-5336e9380c50</code></pre></details>
+<details class="panel"><summary>proxy trusted CA reference rename</summary><pre><code>hcp_generation: 21
+source_sha256: 68cf6f4398dd58c0501ed4ce93cdcd9fb002cb8c42355610536a653b9511a06b
+guest_sha256: 68cf6f4398dd58c0501ed4ce93cdcd9fb002cb8c42355610536a653b9511a06b
+guest_uid: 28c30b3e-eab9-4bd3-9395-5336e9380c50</code></pre></details>
+<details class="panel"><summary>guest drift repair</summary><pre><code>hcp_generation: 21
+source_sha256: 68cf6f4398dd58c0501ed4ce93cdcd9fb002cb8c42355610536a653b9511a06b
+guest_sha256: 68cf6f4398dd58c0501ed4ce93cdcd9fb002cb8c42355610536a653b9511a06b
+guest_uid: 28c30b3e-eab9-4bd3-9395-5336e9380c50</code></pre></details>
+<details class="panel"><summary>guest deletion and recreation</summary><pre><code>hcp_generation: 21
+source_sha256: 68cf6f4398dd58c0501ed4ce93cdcd9fb002cb8c42355610536a653b9511a06b
+guest_sha256: 68cf6f4398dd58c0501ed4ce93cdcd9fb002cb8c42355610536a653b9511a06b
+guest_uid: 23f74d53-030a-401c-be26-d642be1cefd8</code></pre></details>
+<details class="panel"><summary>pause gate</summary><pre><code>guest_bundle_absent_for_seconds: 10</code></pre></details>
+<details class="panel"><summary>resume after pause</summary><pre><code>hcp_generation: 23
+source_sha256: 68cf6f4398dd58c0501ed4ce93cdcd9fb002cb8c42355610536a653b9511a06b
+guest_sha256: 68cf6f4398dd58c0501ed4ce93cdcd9fb002cb8c42355610536a653b9511a06b
+guest_uid: d1c99de0-b716-402d-a729-8b131e37fd0e</code></pre></details>
+<details class="panel"><summary>missing managed source preserves guest data</summary><pre><code>guest_sha256: 68cf6f4398dd58c0501ed4ce93cdcd9fb002cb8c42355610536a653b9511a06b</code></pre></details>
+<details class="panel"><summary>managed source recovery with new CA data</summary><pre><code>hcp_generation: 23
+source_sha256: 3256ff33abdf76bcface23ac2c9e8e7b0a09908ebdf9aaecc59945718473f6ee
+guest_sha256: 3256ff33abdf76bcface23ac2c9e8e7b0a09908ebdf9aaecc59945718473f6ee
+guest_uid: d1c99de0-b716-402d-a729-8b131e37fd0e</code></pre></details>
+<details class="panel"><summary>final reference cleanup</summary><pre><code>guest_bundle_absent: true</code></pre></details>
+<h2 id="controller-logs">Selected controller logs</h2><p>Recorded messages and timestamps; endpoint values are redacted where present.</p><pre><code>2026-09-16T04:18:45.651713875Z {&quot;level&quot;:&quot;info&quot;,&quot;ts&quot;:&quot;2026-09-16T04:18:45Z&quot;,&quot;msg&quot;:&quot;Starting hosted-cluster-config-operator&quot;,&quot;version&quot;:&quot;openshift/hypershift: c76cd3e6a0e06dea62ed0a98aac4b3fe03215d80-review-105dcee2272a. Latest supported OCP: 5.1.0&quot;}
+2026-09-16T04:18:45.735746578Z {&quot;level&quot;:&quot;info&quot;,&quot;ts&quot;:&quot;2026-09-16T04:18:45Z&quot;,&quot;msg&quot;:&quot;Starting EventSource&quot;,&quot;controller&quot;:&quot;user-ca-bundle&quot;,&quot;source&quot;:&quot;kind source: *v1.ConfigMap&quot;}
+2026-09-16T04:18:45.735800328Z {&quot;level&quot;:&quot;info&quot;,&quot;ts&quot;:&quot;2026-09-16T04:18:45Z&quot;,&quot;msg&quot;:&quot;Starting EventSource&quot;,&quot;controller&quot;:&quot;user-ca-bundle&quot;,&quot;source&quot;:&quot;kind source: *v1beta1.HostedControlPlane&quot;}
+2026-09-16T04:18:45.735838088Z {&quot;level&quot;:&quot;info&quot;,&quot;ts&quot;:&quot;2026-09-16T04:18:45Z&quot;,&quot;msg&quot;:&quot;Starting EventSource&quot;,&quot;controller&quot;:&quot;user-ca-bundle&quot;,&quot;source&quot;:&quot;kind source: *v1.ConfigMap&quot;}
+2026-09-16T04:18:46.019579520Z {&quot;level&quot;:&quot;info&quot;,&quot;ts&quot;:&quot;2026-09-16T04:18:46Z&quot;,&quot;msg&quot;:&quot;Starting Controller&quot;,&quot;controller&quot;:&quot;user-ca-bundle&quot;}
+2026-09-16T04:20:50.383095612Z {&quot;level&quot;:&quot;info&quot;,&quot;ts&quot;:&quot;2026-09-16T04:20:50Z&quot;,&quot;msg&quot;:&quot;Reconciliation paused&quot;,&quot;controller&quot;:&quot;user-ca-bundle&quot;,&quot;object&quot;:{&quot;name&quot;:&quot;ocpbugs-114723&quot;,&quot;namespace&quot;:&quot;clusters-ocpbugs-114723&quot;},&quot;namespace&quot;:&quot;clusters-ocpbugs-114723&quot;,&quot;name&quot;:&quot;ocpbugs-114723&quot;,&quot;reconcileID&quot;:&quot;881a4eb4-1ad5-4cbc-b075-1312430a6679&quot;,&quot;pausedUntil&quot;:&quot;True&quot;}
+2026-09-16T04:21:10.588925244Z {&quot;level&quot;:&quot;error&quot;,&quot;ts&quot;:&quot;2026-09-16T04:21:10Z&quot;,&quot;msg&quot;:&quot;Reconciler error&quot;,&quot;controller&quot;:&quot;user-ca-bundle&quot;,&quot;object&quot;:{&quot;name&quot;:&quot;ocpbugs-114723&quot;,&quot;namespace&quot;:&quot;clusters-ocpbugs-114723&quot;},&quot;namespace&quot;:&quot;clusters-ocpbugs-114723&quot;,&quot;name&quot;:&quot;ocpbugs-114723&quot;,&quot;reconcileID&quot;:&quot;689c3407-4fb9-4c10-b5fe-b6ab939d4555&quot;,&quot;error&quot;:&quot;failed to reconcile user cert CA bundle: cannot get managed trusted CA bundle ConfigMap: ConfigMap \&quot;trusted-ca-bundle-managed\&quot; not found&quot;,&quot;stacktrace&quot;:&quot;sigs.k8s.io/controller-runtime/pkg/internal/controller.(*Controller[...]).reconcileHandler\n\t/hypershift/vendor/sigs.k8s.io/controller-runtime/pkg/internal/controller/controller.go:494\nsigs.k8s.io/controller-runtime/pkg/internal/controller.(*Controller[...]).processNextWorkItem\n\t/hypershift/vendor/sigs.k8s.io/controller-runtime/pkg/internal/controller/controller.go:437\nsigs.k8s.io/controller-runtime/pkg/internal/controller.(*Controller[...]).Start.func1.1\n\t/hypershift/vendor/sigs.k8s.io/controller-runtime/pkg/internal/controller/controller.go:312&quot;}
+2026-09-16T04:21:20.918785754Z {&quot;level&quot;:&quot;info&quot;,&quot;ts&quot;:&quot;2026-09-16T04:21:20Z&quot;,&quot;msg&quot;:&quot;deleted unused user-ca-bundle ConfigMap&quot;,&quot;controller&quot;:&quot;user-ca-bundle&quot;,&quot;object&quot;:{&quot;name&quot;:&quot;ocpbugs-114723&quot;,&quot;namespace&quot;:&quot;clusters-ocpbugs-114723&quot;},&quot;namespace&quot;:&quot;clusters-ocpbugs-114723&quot;,&quot;name&quot;:&quot;ocpbugs-114723&quot;,&quot;reconcileID&quot;:&quot;3933add0-ca93-4a80-8076-732537861e85&quot;,&quot;name&quot;:&quot;user-ca-bundle&quot;,&quot;namespace&quot;:&quot;openshift-config&quot;}</code></pre>
+<h2 id="command-transcript">Command transcript</h2><p>The transcript contains the commands used during the live run. Kubeconfig paths and standard-input manifest contents are redacted. The scenario descriptions and hash comparisons above document the tested behavior and assertions.</p><details class="panel"><summary>Expand sanitized command transcript</summary><pre><code>2026-09-16T04:16:30.721846Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters get hc ocpbugs-114723 -o json
+2026-09-16T04:16:31.226608Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 -o json
+2026-09-16T04:16:31.681241Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters get cm ocpbugs-114723-review-additional -o json --ignore-not-found
+2026-09-16T04:16:32.197176Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters get cm ocpbugs-114723-review-proxy -o json --ignore-not-found
+2026-09-16T04:16:32.630557Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:16:33.041277Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm ocpbugs-114723-review-proxy -o json --ignore-not-found
+2026-09-16T04:16:33.434987Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm ocpbugs-114723-review-proxy-renamed -o json --ignore-not-found
+2026-09-16T04:16:34.295063Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' get --raw=/readyz
+2026-09-16T04:16:34.739010Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:16:35.477988Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment control-plane-operator -o json
+2026-09-16T04:16:35.877034Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:16:36.279107Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n hypershift get deployment operator -o json
+2026-09-16T04:17:03.236394Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' apply -f -
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:17:03.717416Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' apply -f -
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:17:04.242118Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters patch hc ocpbugs-114723 --type=merge --patch-file=/dev/stdin
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:17:04.755009Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:17:07.091670Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:17:07.466228Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 -o json
+2026-09-16T04:17:08.016091Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n hypershift scale deployment/operator --replicas=0
+2026-09-16T04:17:08.527091Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n hypershift get deployment operator -o json
+2026-09-16T04:17:08.930575Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n hypershift get pods -l name=operator -o json
+2026-09-16T04:17:11.340844Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n hypershift get pods -l name=operator -o json
+2026-09-16T04:17:11.662491Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 patch deployment control-plane-operator --type=strategic --patch-file=/dev/stdin
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:17:12.166614Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment control-plane-operator -o json
+2026-09-16T04:17:14.582473Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment control-plane-operator -o json
+2026-09-16T04:17:16.995136Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment control-plane-operator -o json
+2026-09-16T04:17:17.527736Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:17:20.032963Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:17:22.504006Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:17:24.911617Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:17:25.363552Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get pods -l app=hosted-cluster-config-operator -o json
+2026-09-16T04:17:25.773474Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:17:26.140599Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 patch hcp ocpbugs-114723 --type=merge --patch-file=/dev/stdin
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:17:26.673729Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:17:29.014680Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:17:31.035217Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:17:31.462800Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 logs deployment/hosted-cluster-config-operator --since-time=2026-09-16T04:17:03.226172Z --timestamps
+2026-09-16T04:17:32.186599Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 patch deployment control-plane-operator --type=strategic --patch-file=/dev/stdin
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:17:32.694346Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment control-plane-operator -o json
+2026-09-16T04:17:35.093301Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment control-plane-operator -o json
+2026-09-16T04:17:37.503357Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment control-plane-operator -o json
+2026-09-16T04:17:39.904595Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment control-plane-operator -o json
+2026-09-16T04:17:42.332123Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment control-plane-operator -o json
+2026-09-16T04:17:42.733924Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:17:45.177037Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:17:47.633109Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:17:50.051176Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:17:52.515439Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:17:54.908386Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:17:57.356641Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:17:59.748661Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:18:02.173977Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:18:04.592125Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:18:07.075148Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:18:09.462183Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:18:11.848926Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:18:14.242088Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:18:16.669599Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:18:19.094701Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:18:21.675060Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:18:24.093001Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:18:26.545080Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:18:28.956516Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:18:31.385097Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:18:33.804342Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:18:36.192172Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:18:38.603089Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:18:41.010305Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:18:43.428429Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:18:45.845007Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:18:48.249931Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:18:48.647903Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get pods -l app=hosted-cluster-config-operator -o json
+2026-09-16T04:18:49.072602Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 logs deployment/hosted-cluster-config-operator --since-time=2026-09-16T04:17:03.226172Z --timestamps
+2026-09-16T04:18:49.701411Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:18:50.025961Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:18:50.462926Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 -o json
+2026-09-16T04:18:50.867812Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json
+2026-09-16T04:18:51.190661Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json
+2026-09-16T04:18:51.544524Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 patch hcp ocpbugs-114723 --type=merge --patch-file=/dev/stdin
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:18:52.076032Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:18:54.411660Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:18:54.753344Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:18:55.096837Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 -o json
+2026-09-16T04:18:55.518327Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json
+2026-09-16T04:18:55.886769Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json
+2026-09-16T04:18:56.211269Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 -o json
+2026-09-16T04:18:56.678727Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' apply -f -
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:18:58.023783Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:00.341000Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:00.663401Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:19:01.021716Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 -o json
+2026-09-16T04:19:01.438911Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json
+2026-09-16T04:19:01.754502Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json
+2026-09-16T04:19:02.082221Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 -o json
+2026-09-16T04:19:02.493745Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 -o json
+2026-09-16T04:19:02.908270Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' apply -f -
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:19:03.542092Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:05.866713Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:06.190586Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:19:06.509961Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 -o json
+2026-09-16T04:19:06.939510Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json
+2026-09-16T04:19:07.264567Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json
+2026-09-16T04:19:07.713198Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 -o json
+2026-09-16T04:19:08.138382Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 patch hcp ocpbugs-114723 --type=merge --patch-file=/dev/stdin
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:19:08.663585Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:10.984594Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:11.312157Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:19:11.637415Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 -o json
+2026-09-16T04:19:12.105051Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json
+2026-09-16T04:19:12.541592Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json
+2026-09-16T04:19:12.944724Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 patch hcp ocpbugs-114723 --type=merge --patch-file=/dev/stdin
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:19:13.509514Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:19:13.948240Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 patch hcp ocpbugs-114723 --type=merge --patch-file=/dev/stdin
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:19:14.477589Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:16.798567Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:17.177254Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:19:17.517734Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 -o json
+2026-09-16T04:19:17.941393Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json
+2026-09-16T04:19:18.350128Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json
+2026-09-16T04:19:18.755061Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 patch hcp ocpbugs-114723 --type=merge --patch-file=/dev/stdin
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:19:19.262745Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:21.603853Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:23.948488Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:26.302728Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:28.925718Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:31.283075Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:33.617357Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:35.948965Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:38.275297Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:40.646630Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:42.986606Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:45.308766Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:47.649537Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:50.076641Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:52.481737Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:54.806712Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:57.146095Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:19:59.581453Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:20:02.025445Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:20:04.456027Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:20:06.783647Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:20:09.118474Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:20:11.476080Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:20:13.817558Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:20:16.151332Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:20:18.472944Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:20:20.822715Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:20:23.159423Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:20:25.502645Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:20:27.862080Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:20:30.196552Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:20:31.935601Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' apply -f -
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:20:32.531329Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:20:32.859957Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:20:33.427860Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 -o json
+2026-09-16T04:20:33.843475Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json
+2026-09-16T04:20:34.172187Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json
+2026-09-16T04:20:34.511499Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 patch hcp ocpbugs-114723 --type=merge --patch-file=/dev/stdin
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:20:35.013303Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:20:37.366308Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:20:37.695642Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:20:38.021214Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 -o json
+2026-09-16T04:20:38.445987Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json
+2026-09-16T04:20:38.804971Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json
+2026-09-16T04:20:39.213195Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' apply -f -
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:20:39.700888Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 patch hcp ocpbugs-114723 --type=merge --patch-file=/dev/stdin
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:20:40.259969Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:20:42.595035Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:20:42.983957Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:20:43.322957Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 -o json
+2026-09-16T04:20:43.760155Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json
+2026-09-16T04:20:44.096218Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json
+2026-09-16T04:20:44.413698Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config patch cm user-ca-bundle --type=merge --patch-file=/dev/stdin
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:20:45.001176Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:20:45.359329Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:20:45.687926Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 -o json
+2026-09-16T04:20:46.126556Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json
+2026-09-16T04:20:46.465423Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json
+2026-09-16T04:20:46.810218Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json
+2026-09-16T04:20:47.137349Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config delete cm user-ca-bundle
+2026-09-16T04:20:47.626839Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:20:47.960040Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:20:48.284389Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 -o json
+2026-09-16T04:20:48.702271Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json
+2026-09-16T04:20:49.039290Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json
+2026-09-16T04:20:49.392271Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json
+2026-09-16T04:20:49.797873Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 patch hcp ocpbugs-114723 --type=merge --patch-file=/dev/stdin
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:20:50.418849Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 logs deployment/hosted-cluster-config-operator --since-time=2026-09-16T04:17:03.226172Z --timestamps
+2026-09-16T04:20:51.858731Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config delete cm user-ca-bundle
+2026-09-16T04:20:54.278328Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:20:56.691177Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:20:59.114939Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:21:01.595656Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:21:04.025580Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:21:04.440609Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 patch hcp ocpbugs-114723 --type=merge --patch-file=/dev/stdin
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:21:04.958659Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:21:05.283523Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:21:05.605364Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 -o json
+2026-09-16T04:21:06.010480Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json
+2026-09-16T04:21:06.338395Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json
+2026-09-16T04:21:06.655934Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 scale deployment/control-plane-operator --replicas=0
+2026-09-16T04:21:07.141113Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment control-plane-operator -o json
+2026-09-16T04:21:07.551463Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get pods -l name=control-plane-operator -o json
+2026-09-16T04:21:09.983317Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get pods -l name=control-plane-operator -o json
+2026-09-16T04:21:10.309071Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 delete cm trusted-ca-bundle-managed
+2026-09-16T04:21:10.713176Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 logs deployment/hosted-cluster-config-operator --since-time=2026-09-16T04:17:03.226172Z --timestamps
+2026-09-16T04:21:11.784799Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:21:12.185265Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' apply -f -
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:21:12.877574Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 scale deployment/control-plane-operator --replicas=1
+2026-09-16T04:21:13.379040Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment control-plane-operator -o json
+2026-09-16T04:21:15.811394Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment control-plane-operator -o json
+2026-09-16T04:21:16.226837Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:21:18.635482Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json --ignore-not-found
+2026-09-16T04:21:18.962688Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:21:19.312293Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get hcp ocpbugs-114723 -o json
+2026-09-16T04:21:19.732693Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get cm trusted-ca-bundle-managed -o json
+2026-09-16T04:21:20.070208Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json
+2026-09-16T04:21:20.396928Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 patch hcp ocpbugs-114723 --type=merge --patch-file=/dev/stdin
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:21:20.949769Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:21:21.355631Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 logs deployment/hosted-cluster-config-operator --since-time=2026-09-16T04:17:03.226172Z --timestamps
+2026-09-16T04:21:22.407009Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters patch hc ocpbugs-114723 --type=merge --patch-file=/dev/stdin
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:21:22.947864Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 patch hcp ocpbugs-114723 --type=merge --patch-file=/dev/stdin
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:21:23.473158Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment control-plane-operator -o json
+2026-09-16T04:21:23.865500Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 patch deployment control-plane-operator --type=json --patch-file=/dev/stdin
+# stdin: sanitized test manifest/patch; CA bytes omitted
+2026-09-16T04:21:24.379804Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 scale deployment/control-plane-operator --replicas=1
+2026-09-16T04:21:24.887437Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n hypershift scale deployment/operator --replicas=1
+2026-09-16T04:21:25.360842Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment control-plane-operator -o json
+2026-09-16T04:21:27.777789Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment control-plane-operator -o json
+2026-09-16T04:21:28.192708Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:21:30.579442Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:21:32.998867Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:21:35.423748Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:21:37.821821Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:21:40.264683Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:21:42.708456Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:21:45.176780Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:21:47.639452Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 get deployment hosted-cluster-config-operator -o json
+2026-09-16T04:21:48.126591Z oc '--kubeconfig=&lt;guest-kubeconfig&gt;' -n openshift-config get cm user-ca-bundle -o json --ignore-not-found
+2026-09-16T04:21:48.619765Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters delete cm ocpbugs-114723-review-additional ocpbugs-114723-review-proxy --ignore-not-found
+2026-09-16T04:21:49.183563Z oc '--kubeconfig=&lt;management-kubeconfig&gt;' -n clusters-ocpbugs-114723 delete cm user-ca-bundle ocpbugs-114723-review-proxy ocpbugs-114723-review-proxy-renamed --ignore-not-found
+</code></pre></details>
+<h2>Restoration</h2><div class="panel success"><p>Confirmed at 04:23 UTC: management operator, CPO, and HCCO Ready; original CPO/HCCO image restored to <code>quay.io/vsolanki/hypershift-control-plane:ocpbugs-114436</code>; HC/HCP unpaused, both trust references cleared, temporary source ConfigMaps and guest <code>user-ca-bundle</code> absent.</p></div>
+<h2>Evidence and report history</h2><ul><li><a href="#controller-logs">Selected sanitized controller logs</a></li><li><a href="#command-transcript">Sanitized command transcript</a></li><li><a href="https://github.com/openshift/hypershift/pull/9458#issuecomment-5692231970">Review response describing the fix and live validation</a></li><li><a href="https://github.com/vsolanki12/vsolanki12.github.io/blob/8a39779cc0d21c7524caeb0e3c6fe276ceb06c5c/OCPBUGS-114723-verification-report.html">Previous report version: 15 September 2026 (HTML source)</a></li></ul>
+<p><small>Certificate contents, private keys, credentials, kubeconfig contents, and private endpoints are excluded. The relevant logs and command transcript are embedded in this page; standalone test artifacts remain local. This is focused validation of the user CA bundle behavior tested above, not a full-cluster end-to-end qualification.</small></p>
+</main></body></html>
